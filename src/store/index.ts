@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { User, Idea, Chat, Message, Favorite, Bounty, IdeaFilter, Transaction, Offer, Report, TransactionReview } from '@/types';
+import type { User, Idea, Chat, Message, Favorite, Bounty, IdeaFilter, Transaction, Offer, Report, TransactionReview, Stage, Deliverable } from '@/types';
 import { mockUsers, mockIdeas, mockChats, mockBounties } from '@/data/mockData';
 
 interface AppState {
@@ -30,8 +30,14 @@ interface AppState {
   acceptOffer: (chatId: string, offerId: string) => void;
   rejectOffer: (chatId: string, offerId: string) => void;
   createTransaction: (offer: Offer) => void;
-  submitStageDeliverable: (transactionId: string, stageId: string, deliverable: string) => void;
+  confirmPayment: (transactionId: string) => void;
+  startStage: (transactionId: string, stageId: string) => void;
+  updateStageAssignee: (transactionId: string, stageId: string, assigneeId: string) => void;
+  updateStageNotes: (transactionId: string, stageId: string, notes: string) => void;
+  addDeliverable: (transactionId: string, stageId: string, deliverable: Deliverable) => void;
+  submitStage: (transactionId: string, stageId: string) => void;
   confirmStage: (transactionId: string, stageId: string) => void;
+  settleTransaction: (transactionId: string) => void;
   submitReview: (transactionId: string, review: TransactionReview) => void;
   completeTransaction: (transactionId: string) => void;
   addReport: (report: Report) => void;
@@ -46,13 +52,16 @@ interface AppState {
   getUserTransactions: () => Transaction[];
   getUserReports: () => Report[];
   getPendingOffers: () => Offer[];
+  getUserReviewsReceived: () => TransactionReview[];
+  getUserReviewsGiven: () => TransactionReview[];
   calculateCreditScore: (userId: string) => number;
+  getCreditTrend: () => { date: string; score: number }[];
 }
 
-const defaultStages = [
-  { id: 'stage-1', name: '需求确认', description: '确认合作需求和范围', deliverables: [], status: 'pending' as const },
-  { id: 'stage-2', name: '方案设计', description: '完成初步方案设计', deliverables: [], status: 'pending' as const },
-  { id: 'stage-3', name: '最终交付', description: '完成最终交付物', deliverables: [], status: 'pending' as const },
+const defaultStages: Omit<Stage, 'id'>[] = [
+  { name: '需求确认', description: '确认合作需求和范围', deliverables: [], status: 'pending' },
+  { name: '方案设计', description: '完成初步方案设计', deliverables: [], status: 'pending' },
+  { name: '最终交付', description: '完成最终交付物', deliverables: [], status: 'pending' },
 ];
 
 export const useStore = create<AppState>()(
@@ -61,7 +70,7 @@ export const useStore = create<AppState>()(
       user: { ...mockUsers[0], reviewCount: 0, positiveReviews: 0 },
       ideas: mockIdeas,
       bounties: mockBounties,
-      chats: mockChats.map(chat => ({ ...chat, offers: [] })),
+      chats: mockChats.map(chat => ({ ...chat, offers: [], transactionId: undefined })),
       favorites: [],
       transactions: [],
       reports: [],
@@ -122,7 +131,7 @@ export const useStore = create<AppState>()(
 
       addBounty: (bounty) => set((state) => ({ bounties: [bounty, ...state.bounties] })),
 
-      addChat: (chat) => set((state) => ({ chats: [{ ...chat, offers: [] }, ...state.chats] })),
+      addChat: (chat) => set((state) => ({ chats: [{ ...chat, offers: [], transactionId: undefined }, ...state.chats] })),
 
       sendMessage: (chatId, message) => set((state) => ({
         chats: state.chats.map((chat) =>
@@ -142,10 +151,6 @@ export const useStore = create<AppState>()(
       })),
 
       submitOffer: (chatId, offer) => {
-        const state = get();
-        const chat = state.chats.find(c => c.id === chatId);
-        if (!chat) return;
-
         const systemMessage: Message = {
           id: `msg-${Date.now()}`,
           chatId,
@@ -213,21 +218,20 @@ export const useStore = create<AppState>()(
         const idea = state.ideas.find(i => i.id === offer.ideaId);
         if (!idea) return;
 
+        const transactionId = `tx-${Date.now()}`;
         const transaction: Transaction = {
-          id: `tx-${Date.now()}`,
+          id: transactionId,
           ideaId: offer.ideaId,
           ideaTitle: idea.title,
           buyerId: offer.buyerId,
           sellerId: offer.sellerId,
           amount: offer.amount,
-          stages: defaultStages.map((s, i) => ({
+          paymentStatus: 'unpaid',
+          stages: defaultStages.map((s) => ({
             ...s,
-            id: `${s.id}-${Date.now()}`,
-            transactionId: `tx-${Date.now()}`,
-            status: i === 0 ? 'submitted' : 'pending' as const,
-            submittedAt: i === 0 ? new Date().toISOString() : undefined,
+            id: `stage-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           })),
-          status: 'in_progress',
+          status: 'pending',
           reviews: [],
           createdAt: new Date().toISOString(),
         };
@@ -236,7 +240,7 @@ export const useStore = create<AppState>()(
           id: `msg-${Date.now()}-system`,
           chatId: '',
           senderId: 'system',
-          content: `✅ 报价 ¥${offer.amount} 已接受，交易已创建！`,
+          content: `✅ 报价 ¥${offer.amount} 已接受，交易已创建！请买方确认付款以开始交易。`,
           type: 'system',
           read: false,
           createdAt: new Date().toISOString(),
@@ -248,10 +252,11 @@ export const useStore = create<AppState>()(
             i.id === offer.ideaId ? { ...i, status: 'completed' } : i
           ),
           chats: state.chats.map((chat) => {
-            const offerChat = chat.offers.find((o) => o.id === offer.id);
-            if (offerChat) {
+            const offerInChat = chat.offers.find((o) => o.id === offer.id);
+            if (offerInChat) {
               return {
                 ...chat,
+                transactionId,
                 messages: [...chat.messages, systemMessage],
               };
             }
@@ -266,19 +271,112 @@ export const useStore = create<AppState>()(
         }
       },
 
-      submitStageDeliverable: (transactionId, stageId, deliverable) => set((state) => ({
+      confirmPayment: (transactionId) => {
+        set((state) => ({
+          transactions: state.transactions.map((tx) =>
+            tx.id === transactionId
+              ? {
+                  ...tx,
+                  paymentStatus: 'escrow',
+                  status: 'in_progress',
+                  paidAt: new Date().toISOString(),
+                  stages: tx.stages.map((s, i) =>
+                    i === 0 ? { ...s, status: 'in_progress', startedAt: new Date().toISOString() } : s
+                  ),
+                }
+              : tx
+          ),
+        }));
+
+        const state = get();
+        const tx = state.transactions.find(t => t.id === transactionId);
+        if (tx) {
+          const chat = state.chats.find(c => c.transactionId === transactionId);
+          if (chat) {
+            const paymentMessage: Message = {
+              id: `msg-${Date.now()}-payment`,
+              chatId: chat.id,
+              senderId: 'system',
+              content: `💰 买方已确认付款 ¥${tx.amount}，资金已托管，交易正式开始！`,
+              type: 'system',
+              read: false,
+              createdAt: new Date().toISOString(),
+            };
+            set((state) => ({
+              chats: state.chats.map((c) =>
+                c.id === chat.id
+                  ? { ...c, messages: [...c.messages, paymentMessage] }
+                  : c
+              ),
+            }));
+          }
+        }
+      },
+
+      startStage: (transactionId, stageId) => set((state) => ({
         transactions: state.transactions.map((tx) =>
           tx.id === transactionId
             ? {
                 ...tx,
                 stages: tx.stages.map((s) =>
                   s.id === stageId
-                    ? {
-                        ...s,
-                        status: 'submitted' as const,
-                        deliverables: [...s.deliverables, deliverable],
-                        submittedAt: new Date().toISOString(),
-                      }
+                    ? { ...s, status: 'in_progress', startedAt: new Date().toISOString() }
+                    : s
+                ),
+              }
+            : tx
+        ),
+      })),
+
+      updateStageAssignee: (transactionId, stageId, assigneeId) => set((state) => ({
+        transactions: state.transactions.map((tx) =>
+          tx.id === transactionId
+            ? {
+                ...tx,
+                stages: tx.stages.map((s) =>
+                  s.id === stageId ? { ...s, assigneeId } : s
+                ),
+              }
+            : tx
+        ),
+      })),
+
+      updateStageNotes: (transactionId, stageId, notes) => set((state) => ({
+        transactions: state.transactions.map((tx) =>
+          tx.id === transactionId
+            ? {
+                ...tx,
+                stages: tx.stages.map((s) =>
+                  s.id === stageId ? { ...s, notes } : s
+                ),
+              }
+            : tx
+        ),
+      })),
+
+      addDeliverable: (transactionId, stageId, deliverable) => set((state) => ({
+        transactions: state.transactions.map((tx) =>
+          tx.id === transactionId
+            ? {
+                ...tx,
+                stages: tx.stages.map((s) =>
+                  s.id === stageId
+                    ? { ...s, deliverables: [...s.deliverables, deliverable] }
+                    : s
+                ),
+              }
+            : tx
+        ),
+      })),
+
+      submitStage: (transactionId, stageId) => set((state) => ({
+        transactions: state.transactions.map((tx) =>
+          tx.id === transactionId
+            ? {
+                ...tx,
+                stages: tx.stages.map((s) =>
+                  s.id === stageId
+                    ? { ...s, status: 'submitted', submittedAt: new Date().toISOString() }
                     : s
                 ),
               }
@@ -293,12 +391,12 @@ export const useStore = create<AppState>()(
           const stageIndex = tx.stages.findIndex((s) => s.id === stageId);
           if (stageIndex === -1) return tx;
 
-          const updatedStages = tx.stages.map((s, i) => {
+          const updatedStages: Stage[] = tx.stages.map((s, i) => {
             if (i === stageIndex) {
               return { ...s, status: 'confirmed' as const, confirmedAt: new Date().toISOString() };
             }
             if (i === stageIndex + 1 && s.status === 'pending') {
-              return { ...s, status: 'submitted' as const, submittedAt: new Date().toISOString() };
+              return { ...s, status: 'in_progress' as const, startedAt: new Date().toISOString() };
             }
             return s;
           });
@@ -308,10 +406,24 @@ export const useStore = create<AppState>()(
           return {
             ...tx,
             stages: updatedStages,
-            status: allConfirmed ? 'completed' : tx.status,
+            status: allConfirmed ? 'completed' as const : tx.status,
             completedAt: allConfirmed ? new Date().toISOString() : undefined,
           };
         }),
+      })),
+
+      settleTransaction: (transactionId) => set((state) => ({
+        transactions: state.transactions.map((tx) =>
+          tx.id === transactionId
+            ? {
+                ...tx,
+                paymentStatus: 'settled',
+                settledAt: new Date().toISOString(),
+                status: 'completed',
+                completedAt: new Date().toISOString(),
+              }
+            : tx
+        ),
       })),
 
       submitReview: (transactionId, review) => {
@@ -327,11 +439,11 @@ export const useStore = create<AppState>()(
         const transaction = state.transactions.find((t) => t.id === transactionId);
         if (!transaction) return;
 
-        const allReviewsForSeller = transaction.reviews.filter((r) => r.toUserId === transaction.sellerId);
-        const allReviewsForBuyer = transaction.reviews.filter((r) => r.toUserId === transaction.buyerId);
+        const reviewsForUser = state.transactions
+          .filter((tx) => tx.buyerId === review.toUserId || tx.sellerId === review.toUserId)
+          .flatMap((tx) => tx.reviews.filter((r) => r.toUserId === review.toUserId));
 
-        get().updateUserCredit(transaction.sellerId, allReviewsForSeller);
-        get().updateUserCredit(transaction.buyerId, allReviewsForBuyer);
+        get().updateUserCredit(review.toUserId, reviewsForUser);
       },
 
       completeTransaction: (transactionId) => set((state) => ({
@@ -424,16 +536,59 @@ export const useStore = create<AppState>()(
           .flatMap((chat) => chat.offers.filter((o) => o.sellerId === user.id && o.status === 'pending'));
       },
 
+      getUserReviewsReceived: () => {
+        const { transactions, user } = get();
+        if (!user) return [];
+        return transactions
+          .filter((tx) => tx.buyerId === user.id || tx.sellerId === user.id)
+          .flatMap((tx) => tx.reviews.filter((r) => r.toUserId === user.id));
+      },
+
+      getUserReviewsGiven: () => {
+        const { transactions, user } = get();
+        if (!user) return [];
+        return transactions
+          .filter((tx) => tx.buyerId === user.id || tx.sellerId === user.id)
+          .flatMap((tx) => tx.reviews.filter((r) => r.fromUserId === user.id));
+      },
+
       calculateCreditScore: (userId) => {
         const { transactions } = get();
-        const userTxs = transactions.filter((tx) => tx.buyerId === userId || tx.sellerId === userId);
-        const reviews = userTxs.flatMap((tx) => tx.reviews.filter((r) => r.toUserId === userId));
+        const reviews = transactions
+          .filter((tx) => tx.buyerId === userId || tx.sellerId === userId)
+          .flatMap((tx) => tx.reviews.filter((r) => r.toUserId === userId));
         
         if (reviews.length === 0) return 80;
         
         const avgRating = reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length;
         const baseScore = Math.round(avgRating * 10);
         return Math.min(100, baseScore);
+      },
+
+      getCreditTrend: () => {
+        const { transactions, user } = get();
+        if (!user) return [];
+
+        const userTxs = transactions
+          .filter((tx) => tx.buyerId === user.id || tx.sellerId === user.id)
+          .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+        const trend: { date: string; score: number }[] = [];
+        let cumulativeScore = 80;
+
+        userTxs.forEach((tx, index) => {
+          const txReviews = tx.reviews.filter((r) => r.toUserId === user.id);
+          if (txReviews.length > 0) {
+            const avgRating = txReviews.reduce((sum, r) => sum + r.rating, 0) / txReviews.length;
+            cumulativeScore = Math.min(100, Math.round(cumulativeScore * 0.8 + avgRating * 2));
+          }
+          trend.push({
+            date: new Date(tx.createdAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }),
+            score: cumulativeScore,
+          });
+        });
+
+        return trend.length > 0 ? trend : [{ date: '初始', score: 80 }];
       },
     }),
     {

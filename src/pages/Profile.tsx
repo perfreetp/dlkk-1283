@@ -1,4 +1,4 @@
-import { User, Mail, Shield, Bell, Moon, LogOut, ChevronRight, Flag, CheckCircle, Clock } from 'lucide-react';
+import { User, Mail, Shield, Bell, Moon, LogOut, ChevronRight, Flag, CheckCircle, Clock, XCircle, AlertTriangle, FileText, Calendar, ExternalLink } from 'lucide-react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Avatar } from '@/components/common/Avatar';
 import { Badge } from '@/components/common/Badge';
@@ -8,13 +8,16 @@ import { useStore } from '@/store';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Link } from 'react-router-dom';
+import { Modal } from '@/components/common/Modal';
+import type { Report } from '@/types';
 
 export default function ProfilePage() {
-  const { user, setUser, getUserReports } = useStore();
+  const { user, setUser, getUserReports, getIdeaById } = useStore();
   const [editing, setEditing] = useState(false);
   const [nickname, setNickname] = useState(user?.nickname || '');
   const [email, setEmail] = useState(user?.email || '');
   const [showReports, setShowReports] = useState(false);
+  const [selectedReport, setSelectedReport] = useState<Report | null>(null);
 
   const reports = getUserReports();
 
@@ -33,25 +36,18 @@ export default function ProfilePage() {
     );
   }
 
-  const getReportStatusIcon = (status: string) => {
+  const getReportStatusInfo = (status: string) => {
     switch (status) {
+      case 'pending':
+        return { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-100', label: '待处理' };
       case 'reviewed':
-        return Clock;
+        return { icon: AlertTriangle, color: 'text-[#F59E0B]', bg: 'bg-[#F59E0B]/10', label: '审核中' };
       case 'resolved':
-        return CheckCircle;
+        return { icon: CheckCircle, color: 'text-[#10B981]', bg: 'bg-[#10B981]/10', label: '已处理' };
+      case 'dismissed':
+        return { icon: XCircle, color: 'text-[#EF4444]', bg: 'bg-[#EF4444]/10', label: '已驳回' };
       default:
-        return Flag;
-    }
-  };
-
-  const getReportStatusColor = (status: string) => {
-    switch (status) {
-      case 'reviewed':
-        return 'text-[#F59E0B]';
-      case 'resolved':
-        return 'text-[#10B981]';
-      default:
-        return 'text-gray-400';
+        return { icon: Flag, color: 'text-gray-400', bg: 'bg-gray-100', label: '未知' };
     }
   };
 
@@ -60,7 +56,91 @@ export default function ProfilePage() {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
     });
+  };
+
+  const ReportDetailModal = ({ report }: { report: Report }) => {
+    const statusInfo = getReportStatusInfo(report.status);
+    const idea = getIdeaById(report.ideaId);
+
+    return (
+      <div className="space-y-4">
+        <div className={cn('p-4 rounded-xl', statusInfo.bg)}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <statusInfo.icon className={cn('w-5 h-5', statusInfo.color)} />
+              <span className={cn('font-medium', statusInfo.color)}>{statusInfo.label}</span>
+            </div>
+            <span className="text-xs text-gray-400">
+              提交于 {formatDate(report.createdAt)}
+            </span>
+          </div>
+          {report.resolvedAt && (
+            <p className="text-xs text-gray-500 mt-2">
+              处理时间：{formatDate(report.resolvedAt)}
+            </p>
+          )}
+        </div>
+
+        <div>
+          <h4 className="text-sm font-medium text-gray-700 mb-2">举报原因</h4>
+          <p className="text-sm text-gray-600 bg-gray-50 p-3 rounded-xl">{report.reason}</p>
+        </div>
+
+        <div>
+          <h4 className="text-sm font-medium text-gray-700 mb-2">关联创意</h4>
+          <div className="p-4 rounded-xl bg-gray-50">
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-medium text-gray-900">{report.ideaTitle}</span>
+              {idea && (
+                <Link 
+                  to={`/idea/${idea.id}`}
+                  className="text-xs text-[#2D5BFF] flex items-center gap-1 hover:underline"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  查看详情
+                </Link>
+              )}
+            </div>
+            {report.ideaDescription && (
+              <p className="text-sm text-gray-500 line-clamp-3">{report.ideaDescription}</p>
+            )}
+            {!report.ideaDescription && idea && (
+              <p className="text-sm text-gray-500 line-clamp-3">{idea.description}</p>
+            )}
+          </div>
+        </div>
+
+        {report.adminNote && (
+          <div>
+            <h4 className="text-sm font-medium text-gray-700 mb-2">管理员备注</h4>
+            <p className="text-sm text-gray-600 bg-[#2D5BFF]/5 p-3 rounded-xl border border-[#2D5BFF]/20">
+              {report.adminNote}
+            </p>
+          </div>
+        )}
+
+        {report.status === 'dismissed' && (
+          <div className="p-3 rounded-xl bg-[#EF4444]/10 text-sm text-[#EF4444]">
+            <AlertTriangle className="w-4 h-4 inline mr-1" />
+            该举报已被驳回，可能是因为证据不足或内容不违规。
+          </div>
+        )}
+
+        {report.status === 'resolved' && (
+          <div className="p-3 rounded-xl bg-[#10B981]/10 text-sm text-[#10B981]">
+            <CheckCircle className="w-4 h-4 inline mr-1" />
+            该举报已处理完成，违规内容已被移除或整改。
+          </div>
+        )}
+
+        <Button variant="ghost" onClick={() => setSelectedReport(null)} className="w-full">
+          关闭
+        </Button>
+      </div>
+    );
   };
 
   return (
@@ -167,20 +247,28 @@ export default function ProfilePage() {
                 <p className="text-center text-gray-500 py-4">暂无举报记录</p>
               ) : (
                 reports.map((report) => {
-                  const StatusIcon = getReportStatusIcon(report.status);
+                  const statusInfo = getReportStatusInfo(report.status);
                   return (
-                    <div key={report.id} className="p-4 rounded-xl bg-gray-50">
+                    <div 
+                      key={report.id} 
+                      className="p-4 rounded-xl bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors"
+                      onClick={() => setSelectedReport(report)}
+                    >
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <StatusIcon className={cn('w-4 h-4', getReportStatusColor(report.status))} />
+                          <statusInfo.icon className={cn('w-4 h-4', statusInfo.color)} />
                           <span className="text-sm font-medium text-gray-900">{report.ideaTitle}</span>
                         </div>
-                        <span className={cn('text-xs', getReportStatusColor(report.status))}>
-                          {report.status === 'pending' ? '待处理' : report.status === 'reviewed' ? '审核中' : '已处理'}
+                        <span className={cn('text-xs px-2 py-1 rounded-full', statusInfo.bg, statusInfo.color)}>
+                          {statusInfo.label}
                         </span>
                       </div>
-                      <p className="text-sm text-gray-500 mb-2">{report.reason}</p>
-                      <p className="text-xs text-gray-400">提交于 {formatDate(report.createdAt)}</p>
+                      <p className="text-sm text-gray-500 mb-2 line-clamp-1">{report.reason}</p>
+                      <div className="flex items-center gap-2 text-xs text-gray-400">
+                        <Calendar className="w-3 h-3" />
+                        {formatDate(report.createdAt)}
+                        <ChevronRight className="w-3 h-3 ml-auto" />
+                      </div>
                     </div>
                   );
                 })
@@ -223,6 +311,15 @@ export default function ProfilePage() {
           </Button>
         </CardContent>
       </Card>
+
+      <Modal 
+        isOpen={selectedReport !== null} 
+        onClose={() => setSelectedReport(null)} 
+        title="举报详情" 
+        size="md"
+      >
+        {selectedReport && <ReportDetailModal report={selectedReport} />}
+      </Modal>
     </div>
   );
 }

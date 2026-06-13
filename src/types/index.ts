@@ -58,10 +58,13 @@ export interface Transaction {
   buyerId: string;
   sellerId: string;
   amount: number;
+  paymentStatus: 'unpaid' | 'escrow' | 'settled';
   stages: Stage[];
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
   reviews: TransactionReview[];
   createdAt: string;
+  paidAt?: string;
+  settledAt?: string;
   completedAt?: string;
 }
 
@@ -69,10 +72,22 @@ export interface Stage {
   id: string;
   name: string;
   description: string;
-  deliverables: string[];
-  status: 'pending' | 'submitted' | 'confirmed';
+  assigneeId?: string;
+  notes?: string;
+  deliverables: Deliverable[];
+  status: 'pending' | 'in_progress' | 'submitted' | 'confirmed';
+  startedAt?: string;
   submittedAt?: string;
   confirmedAt?: string;
+}
+
+export interface Deliverable {
+  id: string;
+  name: string;
+  url?: string;
+  description: string;
+  uploadedBy: string;
+  uploadedAt: string;
 }
 
 export interface TransactionReview {
@@ -93,6 +108,7 @@ export interface Chat {
   id: string;
   participantIds: string[];
   ideaId?: string;
+  transactionId?: string;
   offers: Offer[];
   messages: Message[];
   lastMessageAt: string;
@@ -168,8 +184,10 @@ export interface Report {
   reporterId: string;
   ideaId: string;
   ideaTitle: string;
+  ideaDescription?: string;
   reason: string;
-  status: 'pending' | 'reviewed' | 'resolved';
+  status: 'pending' | 'reviewed' | 'resolved' | 'dismissed';
+  adminNote?: string;
   createdAt: string;
   resolvedAt?: string;
 }

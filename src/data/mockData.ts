@@ -271,13 +271,15 @@ export const mockTransactions: Transaction[] = [
     buyerId: 'user4',
     sellerId: 'user2',
     amount: 350,
+    paymentStatus: 'escrow',
     stages: [
-      { id: 's1', name: '方案确认', description: '确认活动策划方案', deliverables: ['策划文档'], status: 'confirmed', submittedAt: '2024-03-10T10:00:00', confirmedAt: '2024-03-10T12:00:00' },
+      { id: 's1', name: '方案确认', description: '确认活动策划方案', deliverables: [{ id: 'd1', name: '策划文档', description: '活动策划方案文档', uploadedBy: 'user2', uploadedAt: '2024-03-10T10:00:00' }], status: 'confirmed', submittedAt: '2024-03-10T10:00:00', confirmedAt: '2024-03-10T12:00:00' },
       { id: 's2', name: '执行支持', description: '活动执行期间的远程支持', deliverables: [], status: 'submitted' },
     ],
     status: 'in_progress',
     reviews: [],
     createdAt: '2024-03-08T09:00:00',
+    paidAt: '2024-03-08T10:00:00',
   },
 ];
 

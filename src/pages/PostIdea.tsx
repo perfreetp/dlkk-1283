@@ -22,22 +22,33 @@ interface FormData {
   field: string;
   tags: string[];
   attachments: Attachment[];
+  type: 'sell' | 'collaborate';
+  budgetMin: string;
+  budgetMax: string;
 }
 
 export default function PostIdeaPage() {
   const navigate = useNavigate();
   const { user, addIdea, ideas } = useStore();
 
-  const [step, setStep] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? 1 : 1;
-  });
+  const [step, setStep] = useState(1);
 
   const [formData, setFormData] = useState<FormData>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        return {
+          title: parsed.title || '',
+          description: parsed.description || '',
+          college: parsed.college || '',
+          field: parsed.field || '',
+          tags: parsed.tags || [],
+          attachments: parsed.attachments || [],
+          type: parsed.type || 'sell',
+          budgetMin: parsed.budgetMin || '',
+          budgetMax: parsed.budgetMax || '',
+        };
       } catch {
         return {
           title: '',
@@ -46,6 +57,9 @@ export default function PostIdeaPage() {
           field: '',
           tags: [],
           attachments: [],
+          type: 'sell',
+          budgetMin: '',
+          budgetMax: '',
         };
       }
     }
@@ -56,16 +70,16 @@ export default function PostIdeaPage() {
       field: '',
       tags: [],
       attachments: [],
+      type: 'sell',
+      budgetMin: '',
+      budgetMax: '',
     };
   });
 
-  const [type, setType] = useState<'sell' | 'collaborate'>('sell');
-  const [budgetMin, setBudgetMin] = useState('');
-  const [budgetMax, setBudgetMax] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [showSimilarWarning, setShowSimilarWarning] = useState(false);
   const [similarIdeas, setSimilarIdeas] = useState<Idea[]>([]);
-  const [forceSubmit, setForceSubmit] = useState(false);
+  const [pendingSubmit, setPendingSubmit] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
@@ -120,7 +134,7 @@ export default function PostIdeaPage() {
       return (titleMatch && (fieldMatch || collegeMatch)) || (fieldMatch && tagMatch);
     });
 
-    if (similar.length > 0) {
+    if (similar.length > 0 && !pendingSubmit) {
       setSimilarIdeas(similar);
       setShowSimilarWarning(true);
       return false;
@@ -128,13 +142,9 @@ export default function PostIdeaPage() {
     return true;
   };
 
-  const handleSubmit = () => {
+  const createIdea = () => {
     if (!formData.title || !formData.description || !formData.college || !formData.field) {
-      return;
-    }
-
-    if (!forceSubmit && !checkSimilarity()) {
-      return;
+      return null;
     }
 
     const newIdea: Idea = {
@@ -142,10 +152,10 @@ export default function PostIdeaPage() {
       userId: user?.id || '',
       title: formData.title,
       description: formData.description,
-      type,
+      type: formData.type,
       tags: formData.tags,
-      budgetMin: type === 'sell' ? Number(budgetMin) || 0 : 0,
-      budgetMax: type === 'sell' ? Number(budgetMax) || 0 : 0,
+      budgetMin: formData.type === 'sell' ? Number(formData.budgetMin) || 0 : 0,
+      budgetMax: formData.type === 'sell' ? Number(formData.budgetMax) || 0 : 0,
       college: formData.college,
       field: formData.field,
       attachments: formData.attachments,
@@ -158,12 +168,33 @@ export default function PostIdeaPage() {
 
     addIdea(newIdea);
     localStorage.removeItem(STORAGE_KEY);
-    navigate(`/idea/${newIdea.id}`);
+    return newIdea;
+  };
+
+  const handleSubmit = () => {
+    if (!checkSimilarity()) {
+      return;
+    }
+
+    const newIdea = createIdea();
+    if (newIdea) {
+      navigate(`/idea/${newIdea.id}`);
+    }
+  };
+
+  const handleContinuePublish = () => {
+    setPendingSubmit(true);
+    setShowSimilarWarning(false);
+    
+    const newIdea = createIdea();
+    if (newIdea) {
+      navigate(`/idea/${newIdea.id}`);
+    }
   };
 
   const canProceedStep1 = formData.title.trim() && formData.description.trim();
   const canProceedStep2 = formData.college && formData.field && formData.tags.length > 0;
-  const canProceedStep3 = type === 'collaborate' || (budgetMin && budgetMax);
+  const canProceedStep3 = formData.type === 'collaborate' || (formData.budgetMin && formData.budgetMax);
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -338,32 +369,32 @@ export default function PostIdeaPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">交易类型</label>
                 <div className="grid grid-cols-2 gap-4">
                   <button
-                    onClick={() => setType('sell')}
+                    onClick={() => setFormData({ ...formData, type: 'sell' })}
                     className={cn(
                       'p-4 rounded-xl border-2 transition-all text-left',
-                      type === 'sell'
+                      formData.type === 'sell'
                         ? 'border-[#FF6B35] bg-[#FF6B35]/5'
                         : 'border-gray-200 hover:border-gray-300'
                     )}
                   >
                     <div className="flex items-center gap-2 mb-2">
-                      <CheckCircle className={cn('w-5 h-5', type === 'sell' ? 'text-[#FF6B35]' : 'text-gray-300')} />
+                      <CheckCircle className={cn('w-5 h-5', formData.type === 'sell' ? 'text-[#FF6B35]' : 'text-gray-300')} />
                       <span className="font-medium text-gray-900">出售创意</span>
                     </div>
                     <p className="text-sm text-gray-500">设置价格，出售你的创意方案</p>
                   </button>
 
                   <button
-                    onClick={() => setType('collaborate')}
+                    onClick={() => setFormData({ ...formData, type: 'collaborate' })}
                     className={cn(
                       'p-4 rounded-xl border-2 transition-all text-left',
-                      type === 'collaborate'
+                      formData.type === 'collaborate'
                         ? 'border-[#2D5BFF] bg-[#2D5BFF]/5'
                         : 'border-gray-200 hover:border-gray-300'
                     )}
                   >
                     <div className="flex items-center gap-2 mb-2">
-                      <CheckCircle className={cn('w-5 h-5', type === 'collaborate' ? 'text-[#2D5BFF]' : 'text-gray-300')} />
+                      <CheckCircle className={cn('w-5 h-5', formData.type === 'collaborate' ? 'text-[#2D5BFF]' : 'text-gray-300')} />
                       <span className="font-medium text-gray-900">寻找队友</span>
                     </div>
                     <p className="text-sm text-gray-500">免费分享，寻找志同道合的伙伴</p>
@@ -371,22 +402,22 @@ export default function PostIdeaPage() {
                 </div>
               </div>
 
-              {type === 'sell' && (
+              {formData.type === 'sell' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">预算范围</label>
                   <div className="flex items-center gap-4">
                     <Input
                       type="number"
                       placeholder="最低价格"
-                      value={budgetMin}
-                      onChange={(e) => setBudgetMin(e.target.value)}
+                      value={formData.budgetMin}
+                      onChange={(e) => setFormData({ ...formData, budgetMin: e.target.value })}
                     />
                     <span className="text-gray-400">-</span>
                     <Input
                       type="number"
                       placeholder="最高价格"
-                      value={budgetMax}
-                      onChange={(e) => setBudgetMax(e.target.value)}
+                      value={formData.budgetMax}
+                      onChange={(e) => setFormData({ ...formData, budgetMax: e.target.value })}
                     />
                   </div>
                 </div>
@@ -406,7 +437,7 @@ export default function PostIdeaPage() {
         </CardContent>
       </Card>
 
-      <Modal isOpen={showSimilarWarning} onClose={() => { setShowSimilarWarning(false); setForceSubmit(false); }} title="相似创意提示" size="lg">
+      <Modal isOpen={showSimilarWarning} onClose={() => { setShowSimilarWarning(false); }} title="相似创意提示" size="lg">
         <div className="space-y-4">
           <div className="flex items-center gap-2 p-3 rounded-xl bg-[#F59E0B]/10 text-[#F59E0B]">
             <AlertTriangle className="w-5 h-5" />
@@ -427,10 +458,10 @@ export default function PostIdeaPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Button variant="ghost" onClick={() => { setShowSimilarWarning(false); setForceSubmit(false); }} className="flex-1">
+            <Button variant="ghost" onClick={() => { setShowSimilarWarning(false); }} className="flex-1">
               取消发布
             </Button>
-            <Button variant="primary" onClick={() => { setForceSubmit(true); setShowSimilarWarning(false); handleSubmit(); }} className="flex-1">
+            <Button variant="primary" onClick={handleContinuePublish} className="flex-1">
               继续发布
             </Button>
           </div>
