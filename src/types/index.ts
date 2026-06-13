@@ -59,7 +59,9 @@ export interface SettlementRecord {
   buyerId: string;
   settledAt: string;
   method: 'auto' | 'manual';
+  settlementType?: 'continue' | 'partial_refund' | 'full_refund';
   stageCompletedAt?: string;
+  resolution?: string;
 }
 
 export interface Dispute {
@@ -68,13 +70,14 @@ export interface Dispute {
   stageId: string;
   initiatorId: string;
   reason: string;
-  status: 'pending' | 'processing' | 'resolved' | 'refunded';
+  status: 'pending' | 'processing' | 'resolved' | 'refunded' | 'continued';
   evidence: DisputeEvidence[];
   responses: DisputeResponse[];
   createdAt: string;
   resolvedAt?: string;
   resolution?: string;
   refundAmount?: number;
+  settlementType?: 'continue' | 'partial_refund' | 'full_refund';
 }
 
 export interface DisputeEvidence {

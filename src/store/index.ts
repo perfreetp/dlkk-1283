@@ -35,6 +35,7 @@ interface AppState {
   updateStageAssignee: (transactionId: string, stageId: string, assigneeId: string) => void;
   updateStageNotes: (transactionId: string, stageId: string, notes: string) => void;
   addDeliverable: (transactionId: string, stageId: string, deliverable: Deliverable) => void;
+  addDeliverablesBatch: (transactionId: string, stageId: string, deliverables: Deliverable[]) => void;
   submitStage: (transactionId: string, stageId: string) => void;
   confirmStage: (transactionId: string, stageId: string) => void;
   settleTransaction: (transactionId: string, method: 'auto' | 'manual') => void;
@@ -45,7 +46,7 @@ interface AppState {
   createDispute: (transactionId: string, stageId: string, reason: string) => void;
   addDisputeEvidence: (transactionId: string, evidence: DisputeEvidence) => void;
   addDisputeResponse: (transactionId: string, response: DisputeResponse) => void;
-  resolveDispute: (transactionId: string, resolution: string, refundAmount?: number) => void;
+  resolveDispute: (transactionId: string, settlementType: 'continue' | 'partial_refund' | 'full_refund', resolution: string, refundAmount?: number) => void;
   getFilteredIdeas: () => Idea[];
   getUserById: (id: string) => User | undefined;
   getIdeaById: (id: string) => Idea | undefined;
@@ -360,20 +361,35 @@ export const useStore = create<AppState>()(
         ),
       })),
 
-      addDeliverable: (transactionId, stageId, deliverable) => set((state) => ({
-        transactions: state.transactions.map((tx) =>
-          tx.id === transactionId
-            ? {
-                ...tx,
-                stages: tx.stages.map((s) =>
-                  s.id === stageId
-                    ? { ...s, deliverables: [...s.deliverables, deliverable] }
-                    : s
-                ),
-              }
-            : tx
-        ),
-      })),
+      addDeliverable: (transactionId: string, stageId: string, deliverable: Deliverable) => set((state) => ({
+    transactions: state.transactions.map((tx) =>
+      tx.id === transactionId
+        ? {
+            ...tx,
+            stages: tx.stages.map((s) =>
+              s.id === stageId
+                ? { ...s, deliverables: [...s.deliverables, deliverable] }
+                : s
+            ),
+          }
+        : tx
+    ),
+  })),
+
+  addDeliverablesBatch: (transactionId: string, stageId: string, deliverables: Deliverable[]) => set((state) => ({
+    transactions: state.transactions.map((tx) =>
+      tx.id === transactionId
+        ? {
+            ...tx,
+            stages: tx.stages.map((s) =>
+              s.id === stageId
+                ? { ...s, deliverables: [...s.deliverables, ...deliverables] }
+                : s
+            ),
+          }
+        : tx
+    ),
+  })),
 
       submitStage: (transactionId, stageId) => {
         set((state) => ({
@@ -681,58 +697,88 @@ export const useStore = create<AppState>()(
         ),
       })),
 
-      resolveDispute: (transactionId, resolution, refundAmount) => {
-        const state = get();
-        const tx = state.transactions.find(t => t.id === transactionId);
-        if (!tx || !tx.dispute) return;
+      resolveDispute: (transactionId, settlementType, resolution, refundAmount) => {
+    const state = get();
+    const tx = state.transactions.find(t => t.id === transactionId);
+    if (!tx || !tx.dispute) return;
 
-        const resolvedAt = new Date().toISOString();
-        const isRefunded = refundAmount && refundAmount > 0;
+    const resolvedAt = new Date().toISOString();
+    const isRefunded = settlementType === 'partial_refund' || settlementType === 'full_refund';
+    const isContinued = settlementType === 'continue';
 
-        set((state) => ({
-          transactions: state.transactions.map((tx) =>
-            tx.id === transactionId
-              ? {
-                  ...tx,
-                  dispute: {
-                    ...tx.dispute!,
-                    status: isRefunded ? 'refunded' : 'resolved',
-                    resolution,
-                    refundAmount,
-                    resolvedAt,
-                  },
-                  status: 'completed' as const,
-                  stages: tx.stages.map((s) =>
-                    s.status === 'disputed' ? { ...s, status: 'confirmed' as const } : s
-                  ),
-                  paymentStatus: isRefunded ? 'settled' as const : tx.paymentStatus,
-                }
-              : tx
-          ),
-        }));
+    const status = isRefunded ? 'refunded' : isContinued ? 'continued' : 'resolved';
 
-        const chat = state.chats.find(c => c.transactionId === transactionId);
-        if (chat) {
-          const resolveMessage: Message = {
-            id: `msg-${Date.now()}-resolve`,
-            chatId: chat.id,
-            senderId: 'system',
-            content: isRefunded 
-              ? `✅ 争议已解决：${resolution}。退款 ¥${refundAmount} 已处理。`
-              : `✅ 争议已解决：${resolution}`,
-            type: 'system',
-            read: false,
-            createdAt: new Date().toISOString(),
-          };
-          set((state) => ({
-            chats: state.chats.map((c) =>
-              c.id === chat.id
-                ? { ...c, messages: [...c.messages, resolveMessage] }
-                : c
-            ),
-          }));
-        }
-      },
+    set((state) => ({
+      transactions: state.transactions.map((tx) =>
+        tx.id === transactionId
+          ? {
+              ...tx,
+              dispute: {
+                ...tx.dispute!,
+                status: status as 'refunded' | 'continued' | 'resolved',
+                settlementType,
+                resolution,
+                refundAmount,
+                resolvedAt,
+              },
+              status: 'completed' as const,
+              stages: tx.stages.map((s) =>
+                s.status === 'disputed' ? { ...s, status: isContinued ? 'in_progress' as const : 'confirmed' as const } : s
+              ),
+              paymentStatus: isRefunded ? 'settled' as const : tx.paymentStatus,
+              settlement: isRefunded ? {
+                id: `settlement-${Date.now()}`,
+                transactionId: tx.id,
+                amount: refundAmount || tx.amount,
+                sellerId: tx.sellerId,
+                buyerId: tx.buyerId,
+                settledAt: resolvedAt,
+                method: 'manual' as const,
+                settlementType,
+                resolution,
+              } : tx.settlement,
+              settledAt: isRefunded ? resolvedAt : tx.settledAt,
+              completedAt: resolvedAt,
+            }
+          : tx
+      ),
+    }));
+
+    const chat = state.chats.find(c => c.transactionId === transactionId);
+    if (chat) {
+      let settleContent = '';
+      switch (settlementType) {
+        case 'continue':
+          settleContent = `✅ 争议已协商一致：继续交付。${resolution}`;
+          break;
+        case 'partial_refund':
+          settleContent = `✅ 争议已协商一致：部分退款 ¥${refundAmount}。${resolution}`;
+          break;
+        case 'full_refund':
+          settleContent = `✅ 争议已协商一致：全额退款 ¥${tx.amount}。${resolution}`;
+          break;
+        default:
+          settleContent = `✅ 争议已解决：${resolution}`;
+      }
+
+      const resolveMessage: Message = {
+        id: `msg-${Date.now()}-resolve`,
+        chatId: chat.id,
+        senderId: 'system',
+        content: settleContent,
+        type: 'system',
+        read: false,
+        createdAt: new Date().toISOString(),
+      };
+      set((state) => ({
+        chats: state.chats.map((c) =>
+          c.id === chat.id
+            ? { ...c, messages: [...c.messages, resolveMessage] }
+            : c
+        ),
+      }));
+    }
+  },
 
       getFilteredIdeas: () => {
         const { ideas, filter } = get();

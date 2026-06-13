@@ -1,5 +1,5 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Send, Paperclip, CheckCircle, Clock, ChevronRight, Lightbulb, DollarSign, Package, Upload, User, FileText, Edit3, Plus, Trash2, AlertTriangle, XCircle, Download, Eye, MessageCircle } from 'lucide-react';
+import { ArrowLeft, Send, Paperclip, CheckCircle, Clock, ChevronRight, Lightbulb, DollarSign, Package, Upload, User, FileText, Edit3, Plus, Trash2, AlertTriangle, XCircle, Download, Eye, MessageCircle, RefreshCw } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Avatar } from '@/components/common/Avatar';
@@ -14,10 +14,17 @@ import { useStore } from '@/store';
 import { cn } from '@/lib/utils';
 import type { Message, Deliverable, DisputeEvidence, DisputeResponse } from '@/types';
 
+interface PendingDeliverable {
+  name: string;
+  description: string;
+  file?: File;
+  previewUrl?: string;
+}
+
 export default function ChatRoomPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getChatById, getUserById, getIdeaById, sendMessage, user, markMessagesRead, acceptOffer, rejectOffer, confirmPayment, updateStageAssignee, updateStageNotes, addDeliverable, submitStage, confirmStage, settleTransaction, transactions, createDispute, addDisputeEvidence, addDisputeResponse, resolveDispute } = useStore();
+  const { getChatById, getUserById, getIdeaById, sendMessage, user, markMessagesRead, acceptOffer, rejectOffer, confirmPayment, updateStageAssignee, updateStageNotes, addDeliverablesBatch, submitStage, confirmStage, settleTransaction, transactions, createDispute, addDisputeEvidence, addDisputeResponse, resolveDispute } = useStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const disputeFileRef = useRef<HTMLInputElement>(null);
@@ -40,9 +47,6 @@ export default function ChatRoomPage() {
   const [showDeliverableDetailModal, setShowDeliverableDetailModal] = useState(false);
   const [selectedDeliverables, setSelectedDeliverables] = useState<Deliverable[]>([]);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
-  const [deliverableName, setDeliverableName] = useState('');
-  const [deliverableDesc, setDeliverableDesc] = useState('');
-  const [deliverableFile, setDeliverableFile] = useState<File | null>(null);
   const [stageNotes, setStageNotes] = useState('');
   const [stageAssignee, setStageAssignee] = useState('');
   const [disputeReason, setDisputeReason] = useState('');
@@ -50,6 +54,8 @@ export default function ChatRoomPage() {
   const [disputeFiles, setDisputeFiles] = useState<File[]>([]);
   const [disputeResolution, setDisputeResolution] = useState('');
   const [disputeRefundAmount, setDisputeRefundAmount] = useState('');
+  const [disputeSettlementType, setDisputeSettlementType] = useState<'continue' | 'partial_refund' | 'full_refund'>('continue');
+  const [pendingDeliverables, setPendingDeliverables] = useState<PendingDeliverable[]>([]);
 
   useEffect(() => {
     if (chat) {
@@ -99,53 +105,70 @@ export default function ChatRoomPage() {
     confirmPayment(transaction.id);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setDeliverableFile(file);
-      setDeliverableName(file.name);
-    }
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    const newFiles: PendingDeliverable[] = Array.from(files).map(file => ({
+      name: file.name,
+      description: '',
+      file,
+      previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+    }));
+
+    setPendingDeliverables([...pendingDeliverables, ...newFiles]);
   };
 
-  const handleSubmitDeliverable = async () => {
-    if (!transaction || !selectedStageId || !deliverableName) return;
-    
-    let fileData: string | undefined;
-    let fileType: 'image' | 'pdf' | 'document' | 'other' = 'other';
-    let fileSize: number | undefined;
-
-    if (deliverableFile) {
-      const reader = new FileReader();
-      fileData = await new Promise<string>((resolve) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(deliverableFile);
-      });
-      fileSize = deliverableFile.size;
-      
-      if (deliverableFile.type.startsWith('image/')) {
-        fileType = 'image';
-      } else if (deliverableFile.type === 'application/pdf') {
-        fileType = 'pdf';
-      } else if (deliverableFile.type.includes('document') || deliverableFile.type.includes('word')) {
-        fileType = 'document';
-      }
+  const handleRemovePendingDeliverable = (index: number) => {
+    const updated = [...pendingDeliverables];
+    const removed = updated.splice(index, 1)[0];
+    if (removed.previewUrl) {
+      URL.revokeObjectURL(removed.previewUrl);
     }
+    setPendingDeliverables(updated);
+  };
+
+  const handleSubmitDeliverables = async () => {
+    if (!transaction || !selectedStageId || pendingDeliverables.length === 0) return;
     
-    const deliverable: Deliverable = {
-      id: `del-${Date.now()}`,
-      name: deliverableName,
-      description: deliverableDesc,
-      fileData,
-      fileType,
-      fileSize,
-      uploadedBy: user?.id || '',
-      uploadedAt: new Date().toISOString(),
-    };
+    const deliverables: Deliverable[] = await Promise.all(
+      pendingDeliverables.map(async (p, i) => {
+        let fileData: string | undefined;
+        let fileType: 'image' | 'pdf' | 'document' | 'other' = 'other';
+        let fileSize: number | undefined;
+
+        if (p.file) {
+          fileSize = p.file.size;
+          if (p.file.type.startsWith('image/')) {
+            fileType = 'image';
+          } else if (p.file.type === 'application/pdf') {
+            fileType = 'pdf';
+          } else if (p.file.type.includes('document') || p.file.type.includes('word')) {
+            fileType = 'document';
+          }
+          
+          fileData = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.readAsDataURL(p.file!);
+          });
+        }
+        
+        return {
+          id: `del-${Date.now()}-${i}`,
+          name: p.name || p.file?.name || `交付物 ${i + 1}`,
+          description: p.description,
+          fileData,
+          fileType,
+          fileSize,
+          uploadedBy: user?.id || '',
+          uploadedAt: new Date().toISOString(),
+        };
+      })
+    );
     
-    addDeliverable(transaction.id, selectedStageId, deliverable);
-    setDeliverableName('');
-    setDeliverableDesc('');
-    setDeliverableFile(null);
+    addDeliverablesBatch(transaction.id, selectedStageId, deliverables);
+    setPendingDeliverables([]);
     setShowDeliverableModal(false);
     setSelectedStageId(null);
     if (fileInputRef.current) {
@@ -192,19 +215,34 @@ export default function ChatRoomPage() {
     if (!transaction || !disputeResponseText) return;
 
     const attachments: DisputeEvidence[] = [];
+    
     for (const file of disputeFiles) {
       const reader = new FileReader();
       const fileData = await new Promise<string>((resolve) => {
         reader.onload = () => resolve(reader.result as string);
         reader.readAsDataURL(file);
       });
+      
+      let fileType: 'file' | 'text' = 'file';
+      let fileSize: number | undefined = file.size;
+      
       attachments.push({
-        id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${attachments.length}`,
         uploadedBy: user?.id || '',
-        type: 'file',
+        type: fileType,
         content: fileData,
         fileName: file.name,
-        fileSize: file.size,
+        fileSize,
+        uploadedAt: new Date().toISOString(),
+      });
+    }
+
+    if (disputeResponseText) {
+      attachments.push({
+        id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-text`,
+        uploadedBy: user?.id || '',
+        type: 'text',
+        content: disputeResponseText,
         uploadedAt: new Date().toISOString(),
       });
     }
@@ -227,10 +265,11 @@ export default function ChatRoomPage() {
 
   const handleResolveDispute = () => {
     if (!transaction || !disputeResolution) return;
-    const refund = disputeRefundAmount ? Number(disputeRefundAmount) : undefined;
-    resolveDispute(transaction.id, disputeResolution, refund);
+    const refund = disputeSettlementType === 'partial_refund' ? Number(disputeRefundAmount) : undefined;
+    resolveDispute(transaction.id, disputeSettlementType, disputeResolution, refund);
     setDisputeResolution('');
     setDisputeRefundAmount('');
+    setDisputeSettlementType('continue');
     setShowDisputeDetailModal(false);
   };
 
@@ -273,19 +312,6 @@ export default function ChatRoomPage() {
     }
   };
 
-  const getPaymentStatusColor = (status: string) => {
-    switch (status) {
-      case 'unpaid':
-        return 'text-[#EF4444]';
-      case 'escrow':
-        return 'text-[#F59E0B]';
-      case 'settled':
-        return 'text-[#10B981]';
-      default:
-        return 'text-gray-400';
-    }
-  };
-
   const getDisputeStatusInfo = (status: string) => {
     switch (status) {
       case 'pending':
@@ -296,8 +322,23 @@ export default function ChatRoomPage() {
         return { icon: CheckCircle, color: 'text-[#10B981]', bg: 'bg-[#10B981]/10', label: '已解决' };
       case 'refunded':
         return { icon: XCircle, color: 'text-[#EF4444]', bg: 'bg-[#EF4444]/10', label: '已退款' };
+      case 'continued':
+        return { icon: RefreshCw, color: 'text-[#10B981]', bg: 'bg-[#10B981]/10', label: '继续交付' };
       default:
         return { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-100', label: '未知' };
+    }
+  };
+
+  const getSettlementTypeText = (type: string) => {
+    switch (type) {
+      case 'continue':
+        return '继续交付';
+      case 'partial_refund':
+        return '部分退款';
+      case 'full_refund':
+        return '全额退款';
+      default:
+        return type;
     }
   };
 
@@ -475,11 +516,17 @@ export default function ChatRoomPage() {
 
                 {transaction.settlement && (
                   <div className="mt-3 p-3 rounded-xl bg-[#10B981]/10 text-sm">
-                    <p className="text-[#10B981] font-medium">
-                      {transaction.settlement.method === 'auto' ? '自动结算' : '手动结算'}
-                    </p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-[#10B981] font-medium">
+                        {transaction.settlement.method === 'auto' ? '自动结算' : '手动结算'}
+                        {transaction.settlement.settlementType && ` - ${getSettlementTypeText(transaction.settlement.settlementType)}`}
+                      </p>
+                    </div>
+                    {transaction.settlement.resolution && (
+                      <p className="text-xs text-gray-600 mt-1">{transaction.settlement.resolution}</p>
+                    )}
                     <p className="text-gray-500 text-xs mt-1">
-                      结算时间：{new Date(transaction.settlement.settledAt).toLocaleString('zh-CN')}
+                      时间：{new Date(transaction.settlement.settledAt).toLocaleString('zh-CN')}
                     </p>
                   </div>
                 )}
@@ -577,6 +624,7 @@ export default function ChatRoomPage() {
                               <div className="mt-2 flex items-center gap-2">
                                 <Button variant="outline" size="sm" onClick={() => {
                                   setSelectedStageId(stage.id);
+                                  setPendingDeliverables([]);
                                   setShowDeliverableModal(true);
                                 }}>
                                   <Plus className="w-3 h-3 mr-1" />
@@ -639,52 +687,82 @@ export default function ChatRoomPage() {
         </Card>
       </div>
 
-      <Modal isOpen={showDeliverableModal} onClose={() => { setShowDeliverableModal(false); setSelectedStageId(null); setDeliverableFile(null); }} title="上传交付物" size="md">
+      <Modal isOpen={showDeliverableModal} onClose={() => { setShowDeliverableModal(false); setSelectedStageId(null); setPendingDeliverables([]); }} title="上传交付物（可批量）" size="lg">
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">选择文件</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">选择文件（支持多选）</label>
             <div className="border-2 border-dashed border-gray-200 rounded-xl p-4 text-center hover:border-[#2D5BFF] transition-colors">
               <input
                 type="file"
                 ref={fileInputRef}
-                onChange={handleFileUpload}
+                onChange={handleFileChange}
                 className="hidden"
-                id="deliverable-file"
+                id="deliverable-files"
                 accept="image/*,.pdf,.doc,.docx,.zip,.rar"
+                multiple
               />
-              <label htmlFor="deliverable-file" className="cursor-pointer">
+              <label htmlFor="deliverable-files" className="cursor-pointer">
                 <Upload className="w-6 h-6 text-gray-400 mx-auto mb-2" />
-                <p className="text-sm text-gray-500">点击选择文件</p>
+                <p className="text-sm text-gray-500">点击选择多个文件</p>
                 <p className="text-xs text-gray-400 mt-1">支持图片、PDF、文档、压缩包</p>
               </label>
             </div>
-            {deliverableFile && (
-              <div className="mt-2 p-2 rounded-lg bg-[#2D5BFF]/10 flex items-center gap-2">
-                <FileText className="w-4 h-4 text-[#2D5BFF]" />
-                <span className="text-sm text-gray-700">{deliverableFile.name}</span>
-                <span className="text-xs text-gray-400">{formatFileSize(deliverableFile.size)}</span>
-              </div>
-            )}
           </div>
-          <Input
-            label="交付物名称"
-            placeholder="例如：设计稿、文档、代码"
-            value={deliverableName}
-            onChange={(e) => setDeliverableName(e.target.value)}
-          />
-          <Textarea
-            label="描述说明"
-            placeholder="简要描述交付物内容"
-            value={deliverableDesc}
-            onChange={(e) => setDeliverableDesc(e.target.value)}
-            rows={3}
-          />
+
+          {pendingDeliverables.length > 0 && (
+            <div className="space-y-3 max-h-60 overflow-y-auto">
+              {pendingDeliverables.map((p, index) => (
+                <div key={index} className="p-3 rounded-xl bg-gray-50">
+                  <div className="flex items-start gap-2">
+                    {p.previewUrl ? (
+                      <img src={p.previewUrl} alt="" className="w-16 h-16 object-cover rounded-lg" />
+                    ) : (
+                      <FileText className="w-10 h-10 text-[#2D5BFF]" />
+                    )}
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <input
+                          type="text"
+                          placeholder="文件名"
+                          value={p.name}
+                          onChange={(e) => {
+                            const updated = [...pendingDeliverables];
+                            updated[index].name = e.target.value;
+                            setPendingDeliverables(updated);
+                          }}
+                          className="flex-1 px-2 py-1 text-sm rounded border border-gray-200"
+                        />
+                        <button
+                          onClick={() => handleRemovePendingDeliverable(index)}
+                          className="p-1 hover:bg-gray-200 rounded"
+                        >
+                          <Trash2 className="w-4 h-4 text-[#EF4444]" />
+                        </button>
+                      </div>
+                      <textarea
+                        placeholder="描述说明（选填）"
+                        value={p.description}
+                        onChange={(e) => {
+                          const updated = [...pendingDeliverables];
+                          updated[index].description = e.target.value;
+                          setPendingDeliverables(updated);
+                        }}
+                        className="w-full mt-2 px-2 py-1 text-sm rounded border border-gray-200 resize-none"
+                        rows={2}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-center gap-3">
-            <Button variant="ghost" onClick={() => { setShowDeliverableModal(false); setSelectedStageId(null); setDeliverableFile(null); }} className="flex-1">
+            <Button variant="ghost" onClick={() => { setShowDeliverableModal(false); setSelectedStageId(null); setPendingDeliverables([]); }} className="flex-1">
               取消
             </Button>
-            <Button variant="primary" onClick={handleSubmitDeliverable} className="flex-1" disabled={!deliverableName}>
-              上传
+            <Button variant="primary" onClick={handleSubmitDeliverables} className="flex-1" disabled={pendingDeliverables.length === 0}>
+              提交 {pendingDeliverables.length > 0 ? `(${pendingDeliverables.length}个)` : ''}
             </Button>
           </div>
         </div>
@@ -811,50 +889,48 @@ export default function ChatRoomPage() {
               <p className="text-sm text-gray-600 bg-gray-50 p-3 rounded-xl">{transaction.dispute.reason}</p>
             </div>
 
-            {transaction.dispute.evidence.length > 0 && (
-              <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">证据材料</h4>
-                <div className="space-y-2">
-                  {transaction.dispute.evidence.map((e) => (
-                    <div key={e.id} className="p-3 rounded-xl bg-gray-50">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-[#2D5BFF]" />
-                        <span className="text-sm">{e.fileName || '文字说明'}</span>
-                        <span className="text-xs text-gray-400">
-                          {getUserById(e.uploadedBy)?.nickname}
-                        </span>
-                      </div>
-                      {e.type === 'text' && <p className="text-sm text-gray-500 mt-1">{e.content}</p>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {transaction.dispute.responses.length > 0 && (
               <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">双方回应</h4>
-                <div className="space-y-2">
+                <h4 className="text-sm font-medium text-gray-700 mb-2">证据材料与回应</h4>
+                <div className="space-y-3">
                   {transaction.dispute.responses.map((r) => (
-                    <div key={r.id} className="p-3 rounded-xl bg-gray-50">
-                      <div className="flex items-center gap-2 mb-2">
+                    <div key={r.id} className="p-4 rounded-xl bg-gray-50">
+                      <div className="flex items-center gap-2 mb-3">
                         <Avatar src={getUserById(r.userId)?.avatar} size="sm" fallback={getUserById(r.userId)?.nickname?.[0]} />
                         <span className="text-sm font-medium">{getUserById(r.userId)?.nickname}</span>
                         <span className="text-xs text-gray-400">{new Date(r.createdAt).toLocaleString('zh-CN')}</span>
                       </div>
-                      <p className="text-sm text-gray-600">{r.content}</p>
+                      {r.attachments.map((att) => (
+                        <div key={att.id} className="mb-2 last:mb-0">
+                          {att.type === 'text' && (
+                            <p className="text-sm text-gray-600 bg-white p-2 rounded-lg">{att.content}</p>
+                          )}
+                          {att.type === 'file' && (
+                            <div className="flex items-center gap-2 p-2 bg-white rounded-lg">
+                              <FileText className="w-4 h-4 text-[#2D5BFF]" />
+                              <span className="text-sm flex-1">{att.fileName}</span>
+                              {att.fileSize && <span className="text-xs text-gray-400">{formatFileSize(att.fileSize)}</span>}
+                              {att.content && att.content.startsWith('data:image') ? (
+                                <a href={att.content} target="_blank" rel="noopener noreferrer" className="text-xs text-[#2D5BFF]">预览</a>
+                              ) : att.content ? (
+                                <a href={att.content} download={att.fileName} className="text-xs text-[#2D5BFF]">下载</a>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </div>
               </div>
             )}
 
-            {transaction.dispute.status !== 'resolved' && transaction.dispute.status !== 'refunded' && (
+            {transaction.dispute.status !== 'resolved' && transaction.dispute.status !== 'refunded' && transaction.dispute.status !== 'continued' && (
               <div className="border-t border-gray-100 pt-4">
                 <h4 className="text-sm font-medium text-gray-700 mb-2">补充回应</h4>
                 <div className="space-y-3">
                   <Textarea
-                    placeholder="补充说明或回应"
+                    placeholder="补充说明"
                     value={disputeResponseText}
                     onChange={(e) => setDisputeResponseText(e.target.value)}
                     rows={3}
@@ -869,22 +945,84 @@ export default function ChatRoomPage() {
                       }
                     }}
                     className="hidden"
-                    id="dispute-file"
+                    id="dispute-files"
                     multiple
                   />
-                  <label htmlFor="dispute-file" className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 text-gray-600 text-sm cursor-pointer hover:bg-gray-200">
+                  <label htmlFor="dispute-files" className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 text-gray-600 text-sm cursor-pointer hover:bg-gray-200">
                     <Upload className="w-4 h-4" />
-                    上传材料
+                    上传材料（可多选）
                   </label>
                   {disputeFiles.length > 0 && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap gap-2">
                       {disputeFiles.map((f, i) => (
-                        <span key={i} className="text-xs text-gray-500">{f.name}</span>
+                        <span key={i} className="text-xs px-2 py-1 bg-gray-100 rounded">{f.name}</span>
                       ))}
                     </div>
                   )}
-                  <Button variant="outline" onClick={handleAddDisputeResponse} disabled={!disputeResponseText}>
+                  <Button variant="outline" onClick={handleAddDisputeResponse} disabled={!disputeResponseText && disputeFiles.length === 0}>
                     提交回应
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {transaction.dispute.status !== 'resolved' && transaction.dispute.status !== 'refunded' && transaction.dispute.status !== 'continued' && (
+              <div className="border-t border-gray-100 pt-4">
+                <h4 className="text-sm font-medium text-gray-700 mb-2">协商处理</h4>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      onClick={() => setDisputeSettlementType('continue')}
+                      className={cn(
+                        'p-3 rounded-xl border-2 text-center transition-all',
+                        disputeSettlementType === 'continue' ? 'border-[#10B981] bg-[#10B981]/10' : 'border-gray-200 hover:border-gray-300'
+                      )}
+                    >
+                      <RefreshCw className={cn('w-5 h-5 mx-auto mb-1', disputeSettlementType === 'continue' ? 'text-[#10B981]' : 'text-gray-400')} />
+                      <span className={cn('text-sm', disputeSettlementType === 'continue' ? 'text-[#10B981] font-medium' : 'text-gray-500')}>继续交付</span>
+                    </button>
+                    <button
+                      onClick={() => setDisputeSettlementType('partial_refund')}
+                      className={cn(
+                        'p-3 rounded-xl border-2 text-center transition-all',
+                        disputeSettlementType === 'partial_refund' ? 'border-[#F59E0B] bg-[#F59E0B]/10' : 'border-gray-200 hover:border-gray-300'
+                      )}
+                    >
+                      <DollarSign className={cn('w-5 h-5 mx-auto mb-1', disputeSettlementType === 'partial_refund' ? 'text-[#F59E0B]' : 'text-gray-400')} />
+                      <span className={cn('text-sm', disputeSettlementType === 'partial_refund' ? 'text-[#F59E0B] font-medium' : 'text-gray-500')}>部分退款</span>
+                    </button>
+                    <button
+                      onClick={() => setDisputeSettlementType('full_refund')}
+                      className={cn(
+                        'p-3 rounded-xl border-2 text-center transition-all',
+                        disputeSettlementType === 'full_refund' ? 'border-[#EF4444] bg-[#EF4444]/10' : 'border-gray-200 hover:border-gray-300'
+                      )}
+                    >
+                      <XCircle className={cn('w-5 h-5 mx-auto mb-1', disputeSettlementType === 'full_refund' ? 'text-[#EF4444]' : 'text-gray-400')} />
+                      <span className={cn('text-sm', disputeSettlementType === 'full_refund' ? 'text-[#EF4444] font-medium' : 'text-gray-500')}>全额退款</span>
+                    </button>
+                  </div>
+
+                  {disputeSettlementType === 'partial_refund' && (
+                    <Input
+                      type="number"
+                      label="退款金额"
+                      placeholder={`最高 ¥${transaction.amount}`}
+                      value={disputeRefundAmount}
+                      onChange={(e) => setDisputeRefundAmount(e.target.value)}
+                    />
+                  )}
+
+                  <Textarea
+                    label="处理说明"
+                    placeholder="说明处理结果和原因"
+                    value={disputeResolution}
+                    onChange={(e) => setDisputeResolution(e.target.value)}
+                    rows={2}
+                  />
+
+                  <Button variant="primary" onClick={handleResolveDispute} disabled={!disputeResolution}>
+                    确认协商结果
                   </Button>
                 </div>
               </div>
@@ -893,10 +1031,15 @@ export default function ChatRoomPage() {
             {transaction.dispute.resolution && (
               <div>
                 <h4 className="text-sm font-medium text-gray-700 mb-2">处理结果</h4>
-                <p className="text-sm text-gray-600 bg-[#10B981]/10 p-3 rounded-xl">{transaction.dispute.resolution}</p>
-                {transaction.dispute.refundAmount && (
-                  <p className="text-sm text-[#EF4444] mt-2">退款金额：¥{transaction.dispute.refundAmount}</p>
-                )}
+                <div className="p-4 rounded-xl bg-[#10B981]/10">
+                  <p className="text-sm text-gray-700">{transaction.dispute.resolution}</p>
+                  {transaction.dispute.refundAmount && (
+                    <p className="text-sm text-[#EF4444] mt-2">退款金额：¥{transaction.dispute.refundAmount}</p>
+                  )}
+                  <p className="text-xs text-gray-500 mt-2">
+                    处理时间：{transaction.dispute.resolvedAt && new Date(transaction.dispute.resolvedAt).toLocaleString('zh-CN')}
+                  </p>
+                </div>
               </div>
             )}
           </div>

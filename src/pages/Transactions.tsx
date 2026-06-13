@@ -1,4 +1,4 @@
-import { History, CheckCircle, Clock, XCircle, DollarSign, ArrowRight, Star, ThumbsUp, Shield, FileText, User, Calendar, Link2, AlertTriangle, Download, Eye, MessageCircle } from 'lucide-react';
+import { History, CheckCircle, Clock, XCircle, DollarSign, ArrowRight, Star, ThumbsUp, Shield, FileText, User, Calendar, Link2, AlertTriangle, Download, Eye, MessageCircle, RefreshCw } from 'lucide-react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Avatar } from '@/components/common/Avatar';
 import { Tag } from '@/components/common/Tag';
@@ -8,10 +8,10 @@ import { Textarea } from '@/components/common/Textarea';
 import { useStore } from '@/store';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
-import type { TransactionReview, Stage, Deliverable, DisputeResponse, DisputeEvidence } from '@/types';
+import type { TransactionReview, Stage, Deliverable } from '@/types';
 
 export default function TransactionsPage() {
-  const { user, getUserById, getIdeaById, getUserTransactions, submitReview, transactions } = useStore();
+  const { user, getUserById, getIdeaById, getUserTransactions, submitReview, transactions, calculateCreditScore } = useStore();
   const myTransactions = getUserTransactions();
 
   const [showReviewModal, setShowReviewModal] = useState(false);
@@ -80,6 +80,8 @@ export default function TransactionsPage() {
         return { icon: CheckCircle, color: 'text-[#10B981]', bg: 'bg-[#10B981]/10', label: '已解决' };
       case 'refunded':
         return { icon: XCircle, color: 'text-[#EF4444]', bg: 'bg-[#EF4444]/10', label: '已退款' };
+      case 'continued':
+        return { icon: RefreshCw, color: 'text-[#10B981]', bg: 'bg-[#10B981]/10', label: '继续交付' };
       default:
         return { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-100', label: '未知' };
     }
@@ -98,6 +100,27 @@ export default function TransactionsPage() {
       default:
         return { label: '待开始', color: 'bg-gray-100 text-gray-400' };
     }
+  };
+
+  const getSettlementTypeText = (type: string) => {
+    switch (type) {
+      case 'continue':
+        return '继续交付';
+      case 'partial_refund':
+        return '部分退款';
+      case 'full_refund':
+        return '全额退款';
+      default:
+        return type;
+    }
+  };
+
+  const calculatePositiveRate = (userId: string) => {
+    const userTxs = transactions.filter(tx => tx.buyerId === userId || tx.sellerId === userId);
+    const reviews = userTxs.flatMap(tx => tx.reviews.filter(r => r.toUserId === userId));
+    if (reviews.length === 0) return 100;
+    const positiveCount = reviews.filter(r => r.rating >= 4).length;
+    return Math.round((positiveCount / reviews.length) * 100);
   };
 
   const formatDate = (date: string) => {
@@ -313,6 +336,9 @@ export default function TransactionsPage() {
           const otherUserId = tx.buyerId === user?.id ? tx.sellerId : tx.buyerId;
           const userReview = tx.reviews.find(r => r.fromUserId === user?.id && r.toUserId === otherUserId);
 
+          const otherCreditScore = other ? calculateCreditScore(other.id) : 0;
+          const otherPositiveRate = other ? calculatePositiveRate(other.id) : 100;
+
           return (
             <Card key={tx.id}>
               <CardContent className="p-4">
@@ -337,12 +363,34 @@ export default function TransactionsPage() {
                     <div className="flex items-center gap-4 text-sm">
                       <div className="flex items-center gap-2">
                         <Avatar src={buyer?.avatar} size="sm" fallback={buyer?.nickname?.[0]} />
-                        <span className="text-gray-600">{buyer?.nickname}</span>
+                        <div>
+                          <span className="text-gray-600">{buyer?.nickname}</span>
+                          {buyer && (
+                            <div className="flex items-center gap-1 text-xs">
+                              <span className="text-[#10B981] font-medium">{calculateCreditScore(buyer.id)}</span>
+                              <span className="text-gray-400">分</span>
+                              <span className="text-gray-300">|</span>
+                              <span className="text-[#10B981]">{calculatePositiveRate(buyer.id)}%</span>
+                              <span className="text-gray-400">好评</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <ArrowRight className="w-4 h-4 text-gray-400" />
                       <div className="flex items-center gap-2">
                         <Avatar src={seller?.avatar} size="sm" fallback={seller?.nickname?.[0]} />
-                        <span className="text-gray-600">{seller?.nickname}</span>
+                        <div>
+                          <span className="text-gray-600">{seller?.nickname}</span>
+                          {seller && (
+                            <div className="flex items-center gap-1 text-xs">
+                              <span className="text-[#10B981] font-medium">{calculateCreditScore(seller.id)}</span>
+                              <span className="text-gray-400">分</span>
+                              <span className="text-gray-300">|</span>
+                              <span className="text-[#10B981]">{calculatePositiveRate(seller.id)}%</span>
+                              <span className="text-gray-400">好评</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -405,7 +453,10 @@ export default function TransactionsPage() {
                     <div className="mt-2 text-sm text-gray-600">
                       {tx.paymentStatus === 'unpaid' && '买方尚未确认付款，交易等待开始'}
                       {tx.paymentStatus === 'escrow' && '资金已托管，交易正在进行中'}
-                      {tx.paymentStatus === 'settled' && '交易已完成，资金已结算给卖方'}
+                      {tx.paymentStatus === 'settled' && tx.settlement?.settlementType && (
+                        <span>处理方式：{getSettlementTypeText(tx.settlement.settlementType)}</span>
+                      )}
+                      {tx.paymentStatus === 'settled' && !tx.settlement?.settlementType && '交易已完成，资金已结算给卖方'}
                     </div>
                   </div>
                 </div>
@@ -680,38 +731,36 @@ export default function TransactionsPage() {
               <p className="text-sm text-gray-600 bg-gray-50 p-3 rounded-xl">{selectedDisputeTx.dispute.reason}</p>
             </div>
 
-            {selectedDisputeTx.dispute.evidence.length > 0 && (
-              <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">证据材料</h4>
-                <div className="space-y-2">
-                  {selectedDisputeTx.dispute.evidence.map((e) => (
-                    <div key={e.id} className="p-3 rounded-xl bg-gray-50">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-[#2D5BFF]" />
-                        <span className="text-sm">{e.fileName || '文字说明'}</span>
-                        <span className="text-xs text-gray-400">
-                          {getUserById(e.uploadedBy)?.nickname}
-                        </span>
-                      </div>
-                      {e.type === 'text' && <p className="text-sm text-gray-500 mt-1">{e.content}</p>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {selectedDisputeTx.dispute.responses.length > 0 && (
               <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">双方回应</h4>
-                <div className="space-y-2">
+                <h4 className="text-sm font-medium text-gray-700 mb-2">证据材料与回应</h4>
+                <div className="space-y-3">
                   {selectedDisputeTx.dispute.responses.map((r) => (
-                    <div key={r.id} className="p-3 rounded-xl bg-gray-50">
-                      <div className="flex items-center gap-2 mb-2">
+                    <div key={r.id} className="p-4 rounded-xl bg-gray-50">
+                      <div className="flex items-center gap-2 mb-3">
                         <Avatar src={getUserById(r.userId)?.avatar} size="sm" fallback={getUserById(r.userId)?.nickname?.[0]} />
                         <span className="text-sm font-medium">{getUserById(r.userId)?.nickname}</span>
                         <span className="text-xs text-gray-400">{formatDate(r.createdAt)}</span>
                       </div>
-                      <p className="text-sm text-gray-600">{r.content}</p>
+                      {r.attachments.map((att) => (
+                        <div key={att.id} className="mb-2 last:mb-0">
+                          {att.type === 'text' && (
+                            <p className="text-sm text-gray-600 bg-white p-2 rounded-lg">{att.content}</p>
+                          )}
+                          {att.type === 'file' && (
+                            <div className="flex items-center gap-2 p-2 bg-white rounded-lg">
+                              <FileText className="w-4 h-4 text-[#2D5BFF]" />
+                              <span className="text-sm flex-1">{att.fileName}</span>
+                              {att.fileSize && <span className="text-xs text-gray-400">{formatFileSize(att.fileSize)}</span>}
+                              {att.content && att.content.startsWith('data:image') ? (
+                                <a href={att.content} target="_blank" rel="noopener noreferrer" className="text-xs text-[#2D5BFF]">预览</a>
+                              ) : att.content ? (
+                                <a href={att.content} download={att.fileName} className="text-xs text-[#2D5BFF]">下载</a>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </div>
@@ -721,10 +770,17 @@ export default function TransactionsPage() {
             {selectedDisputeTx.dispute.resolution && (
               <div>
                 <h4 className="text-sm font-medium text-gray-700 mb-2">处理结果</h4>
-                <p className="text-sm text-gray-600 bg-[#10B981]/10 p-3 rounded-xl">{selectedDisputeTx.dispute.resolution}</p>
-                {selectedDisputeTx.dispute.refundAmount && (
-                  <p className="text-sm text-[#EF4444] mt-2">退款金额：¥{selectedDisputeTx.dispute.refundAmount}</p>
-                )}
+                <div className="p-4 rounded-xl bg-[#10B981]/10">
+                  <p className="text-sm text-gray-700">{selectedDisputeTx.dispute.resolution}</p>
+                  {selectedDisputeTx.dispute.settlementType && (
+                    <p className="text-sm text-[#2D5BFF] mt-2">
+                      处理方式：{getSettlementTypeText(selectedDisputeTx.dispute.settlementType)}
+                    </p>
+                  )}
+                  {selectedDisputeTx.dispute.refundAmount && (
+                    <p className="text-sm text-[#EF4444] mt-2">退款金额：¥{selectedDisputeTx.dispute.refundAmount}</p>
+                  )}
+                </div>
               </div>
             )}
           </div>
