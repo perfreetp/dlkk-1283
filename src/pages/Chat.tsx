@@ -1,4 +1,4 @@
-import { MessageSquare, Send, Paperclip, CheckCircle, Clock, FileText, Image } from 'lucide-react';
+import { MessageSquare, Send, Paperclip, CheckCircle, Clock, FileText, Image, DollarSign } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Avatar } from '@/components/common/Avatar';
@@ -57,7 +57,8 @@ function MessageBubble({ message, isOwn }: MessageBubbleProps) {
 }
 
 export default function ChatListPage() {
-  const { chats, getUserById, user, markMessagesRead } = useStore();
+  const { chats, getUserById, user, markMessagesRead, getPendingOffers } = useStore();
+  const pendingOffers = getPendingOffers();
 
   const formatTime = (date: string) => {
     const now = new Date();
@@ -89,7 +90,42 @@ export default function ChatListPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">我的消息</h1>
+        {pendingOffers.length > 0 && (
+          <span className="px-3 py-1 bg-[#FF6B35]/10 text-[#FF6B35] rounded-full text-sm font-medium">
+            {pendingOffers.length} 个待处理报价
+          </span>
+        )}
       </div>
+
+      {pendingOffers.length > 0 && (
+        <Card className="border-2 border-[#FF6B35]/30 bg-gradient-to-r from-[#FF6B35]/5 to-transparent">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <DollarSign className="w-5 h-5 text-[#FF6B35]" />
+              <h3 className="font-semibold text-gray-900">待处理报价</h3>
+            </div>
+            <div className="space-y-2">
+              {pendingOffers.map((offer) => {
+                const buyer = getUserById(offer.buyerId);
+                return (
+                  <a key={offer.id} href={`/chat/${chats.find(c => c.offers.some(o => o.id === offer.id))?.id}`} className="block p-3 rounded-xl bg-white hover:bg-gray-50 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <Avatar src={buyer?.avatar} size="md" fallback={buyer?.nickname?.[0]} />
+                      <div className="flex-1">
+                        <p className="font-medium text-gray-900">{buyer?.nickname}</p>
+                        <p className="text-sm text-gray-500">报价 ¥{offer.amount}</p>
+                      </div>
+                      <Button variant="primary" size="sm">
+                        查看报价
+                      </Button>
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="space-y-3">
         {chats.map((chat) => {
@@ -106,7 +142,14 @@ export default function ChatListPage() {
             >
               <Card hoverable className="cursor-pointer">
                 <CardContent className="p-4 flex items-center gap-4">
-                  <Avatar src={other?.avatar} size="lg" fallback={other?.nickname?.[0]} />
+                  <div className="relative">
+                    <Avatar src={other?.avatar} size="lg" fallback={other?.nickname?.[0]} />
+                    {unread > 0 && (
+                      <span className="absolute -top-1 -right-1 w-5 h-5 bg-[#FF6B35] text-white text-xs rounded-full flex items-center justify-center font-medium">
+                        {unread}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-medium text-gray-900">{other?.nickname}</span>
@@ -116,11 +159,6 @@ export default function ChatListPage() {
                       {lastMessage?.content || '暂无消息'}
                     </p>
                   </div>
-                  {unread > 0 && (
-                    <span className="w-5 h-5 bg-[#FF6B35] text-white text-xs rounded-full flex items-center justify-center font-medium">
-                      {unread}
-                    </span>
-                  )}
                 </CardContent>
               </Card>
             </a>

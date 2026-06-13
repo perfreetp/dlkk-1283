@@ -6,6 +6,8 @@ export interface User {
   email: string;
   creditScore: number;
   transactionCount: number;
+  reviewCount: number;
+  positiveReviews: number;
   badges: Badge[];
   createdAt: string;
 }
@@ -41,7 +43,8 @@ export interface Attachment {
 export interface Offer {
   id: string;
   ideaId: string;
-  userId: string;
+  buyerId: string;
+  sellerId: string;
   amount: number;
   message: string;
   status: 'pending' | 'accepted' | 'rejected';
@@ -51,29 +54,46 @@ export interface Offer {
 export interface Transaction {
   id: string;
   ideaId: string;
+  ideaTitle: string;
   buyerId: string;
   sellerId: string;
   amount: number;
   stages: Stage[];
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  reviews: TransactionReview[];
   createdAt: string;
+  completedAt?: string;
 }
 
 export interface Stage {
   id: string;
-  transactionId: string;
   name: string;
   description: string;
   deliverables: string[];
-  status: 'pending' | 'submitted' | 'confirmed' | 'in_progress';
+  status: 'pending' | 'submitted' | 'confirmed';
   submittedAt?: string;
   confirmedAt?: string;
+}
+
+export interface TransactionReview {
+  id: string;
+  fromUserId: string;
+  toUserId: string;
+  rating: number;
+  dimensions: {
+    response: number;
+    quality: number;
+    communication: number;
+  };
+  comment: string;
+  createdAt: string;
 }
 
 export interface Chat {
   id: string;
   participantIds: string[];
   ideaId?: string;
+  offers: Offer[];
   messages: Message[];
   lastMessageAt: string;
 }
@@ -83,7 +103,7 @@ export interface Message {
   chatId: string;
   senderId: string;
   content: string;
-  type: 'text' | 'file' | 'system';
+  type: 'text' | 'file' | 'system' | 'offer';
   fileUrl?: string;
   read: boolean;
   createdAt: string;
@@ -141,6 +161,17 @@ export interface BountyApplicant {
   message: string;
   status: 'pending' | 'accepted' | 'rejected';
   createdAt: string;
+}
+
+export interface Report {
+  id: string;
+  reporterId: string;
+  ideaId: string;
+  ideaTitle: string;
+  reason: string;
+  status: 'pending' | 'reviewed' | 'resolved';
+  createdAt: string;
+  resolvedAt?: string;
 }
 
 export type IdeaFilter = {

@@ -1,28 +1,64 @@
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Upload, X, Calendar, ChevronRight, ChevronLeft, CheckCircle } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
 import { Textarea } from '@/components/common/Textarea';
-import { cn } from '@/lib/utils';
 import { Select } from '@/components/common/Select';
 import { useStore } from '@/store';
 import { fields } from '@/data/mockData';
+import { cn } from '@/lib/utils';
 import type { Bounty, Attachment } from '@/types';
+
+const STORAGE_KEY = 'post-bounty-form';
+
+interface FormData {
+  title: string;
+  description: string;
+  field: string;
+  budgetMin: string;
+  budgetMax: string;
+  deadline: string;
+  attachments: Attachment[];
+}
 
 export default function PostBountyPage() {
   const navigate = useNavigate();
   const { user, addBounty } = useStore();
 
   const [step, setStep] = useState(1);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [field, setField] = useState('');
-  const [budgetMin, setBudgetMin] = useState('');
-  const [budgetMax, setBudgetMax] = useState('');
-  const [deadline, setDeadline] = useState('');
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [formData, setFormData] = useState<FormData>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return {
+          title: '',
+          description: '',
+          field: '',
+          budgetMin: '',
+          budgetMax: '',
+          deadline: '',
+          attachments: [],
+        };
+      }
+    }
+    return {
+      title: '',
+      description: '',
+      field: '',
+      budgetMin: '',
+      budgetMax: '',
+      deadline: '',
+      attachments: [],
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
+  }, [formData]);
 
   const fieldOptions = fields.map((f) => ({ value: f, label: f }));
 
@@ -39,39 +75,40 @@ export default function PostBountyPage() {
       size: file.size,
     }));
 
-    setAttachments([...attachments, ...newAttachments]);
+    setFormData({ ...formData, attachments: [...formData.attachments, ...newAttachments] });
   };
 
   const removeAttachment = (id: string) => {
-    setAttachments(attachments.filter((a) => a.id !== id));
+    setFormData({ ...formData, attachments: formData.attachments.filter((a) => a.id !== id) });
   };
 
   const handleSubmit = () => {
-    if (!title || !description || !field || !budgetMin || !budgetMax || !deadline) {
+    if (!formData.title || !formData.description || !formData.field || !formData.budgetMin || !formData.budgetMax || !formData.deadline) {
       return;
     }
 
     const newBounty: Bounty = {
       id: `bounty-${Date.now()}`,
       userId: user?.id || '',
-      title,
-      description,
-      budgetMin: Number(budgetMin),
-      budgetMax: Number(budgetMax),
-      deadline,
-      field,
-      attachments,
+      title: formData.title,
+      description: formData.description,
+      budgetMin: Number(formData.budgetMin),
+      budgetMax: Number(formData.budgetMax),
+      deadline: formData.deadline,
+      field: formData.field,
+      attachments: formData.attachments,
       status: 'open',
       applicants: [],
       createdAt: new Date().toISOString(),
     };
 
     addBounty(newBounty);
+    localStorage.removeItem(STORAGE_KEY);
     navigate('/bounty');
   };
 
-  const canProceedStep1 = title.trim() && description.trim();
-  const canProceedStep2 = field && budgetMin && budgetMax && deadline;
+  const canProceedStep1 = formData.title.trim() && formData.description.trim();
+  const canProceedStep2 = formData.field && formData.budgetMin && formData.budgetMax && formData.deadline;
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -115,16 +152,16 @@ export default function PostBountyPage() {
               <Input
                 label="需求标题"
                 placeholder="用一句话概括你的需求"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                value={formData.title}
+                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                 maxLength={50}
               />
 
               <Textarea
                 label="详细描述"
                 placeholder="详细描述你的需求，包括具体要求、期望交付物等"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 rows={6}
                 maxLength={500}
               />
@@ -146,9 +183,9 @@ export default function PostBountyPage() {
                   </label>
                 </div>
 
-                {attachments.length > 0 && (
+                {formData.attachments.length > 0 && (
                   <div className="mt-4 space-y-2">
-                    {attachments.map((att) => (
+                    {formData.attachments.map((att) => (
                       <div
                         key={att.id}
                         className="flex items-center justify-between p-2 rounded-lg bg-gray-50"
@@ -179,8 +216,8 @@ export default function PostBountyPage() {
               <Select
                 label="领域分类"
                 options={[{ value: '', label: '请选择领域' }, ...fieldOptions]}
-                value={field}
-                onChange={(e) => setField(e.target.value)}
+                value={formData.field}
+                onChange={(e) => setFormData({ ...formData, field: e.target.value })}
               />
 
               <div>
@@ -189,15 +226,15 @@ export default function PostBountyPage() {
                   <Input
                     type="number"
                     placeholder="最低预算"
-                    value={budgetMin}
-                    onChange={(e) => setBudgetMin(e.target.value)}
+                    value={formData.budgetMin}
+                    onChange={(e) => setFormData({ ...formData, budgetMin: e.target.value })}
                   />
                   <span className="text-gray-400">-</span>
                   <Input
                     type="number"
                     placeholder="最高预算"
-                    value={budgetMax}
-                    onChange={(e) => setBudgetMax(e.target.value)}
+                    value={formData.budgetMax}
+                    onChange={(e) => setFormData({ ...formData, budgetMax: e.target.value })}
                   />
                 </div>
               </div>
@@ -207,8 +244,8 @@ export default function PostBountyPage() {
                 <div className="relative">
                   <input
                     type="date"
-                    value={deadline}
-                    onChange={(e) => setDeadline(e.target.value)}
+                    value={formData.deadline}
+                    onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
                     min={new Date().toISOString().split('T')[0]}
                     className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#2D5BFF]/20"
                   />

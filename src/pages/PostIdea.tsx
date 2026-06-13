@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Upload, X, AlertTriangle, CheckCircle, ChevronRight, ChevronLeft } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
@@ -13,23 +13,63 @@ import { colleges, fields } from '@/data/mockData';
 import { cn } from '@/lib/utils';
 import type { Idea, Attachment } from '@/types';
 
+const STORAGE_KEY = 'post-idea-form';
+
+interface FormData {
+  title: string;
+  description: string;
+  college: string;
+  field: string;
+  tags: string[];
+  attachments: Attachment[];
+}
+
 export default function PostIdeaPage() {
   const navigate = useNavigate();
   const { user, addIdea, ideas } = useStore();
 
-  const [step, setStep] = useState(1);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
+  const [step, setStep] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? 1 : 1;
+  });
+
+  const [formData, setFormData] = useState<FormData>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return {
+          title: '',
+          description: '',
+          college: '',
+          field: '',
+          tags: [],
+          attachments: [],
+        };
+      }
+    }
+    return {
+      title: '',
+      description: '',
+      college: '',
+      field: '',
+      tags: [],
+      attachments: [],
+    };
+  });
+
   const [type, setType] = useState<'sell' | 'collaborate'>('sell');
-  const [college, setCollege] = useState('');
-  const [field, setField] = useState('');
-  const [tags, setTags] = useState<string[]>([]);
-  const [tagInput, setTagInput] = useState('');
   const [budgetMin, setBudgetMin] = useState('');
   const [budgetMax, setBudgetMax] = useState('');
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [tagInput, setTagInput] = useState('');
   const [showSimilarWarning, setShowSimilarWarning] = useState(false);
   const [similarIdeas, setSimilarIdeas] = useState<Idea[]>([]);
+  const [forceSubmit, setForceSubmit] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
+  }, [formData]);
 
   const collegeOptions = colleges.map((c) => ({ value: c, label: c }));
   const fieldOptions = fields.map((f) => ({ value: f, label: f }));
@@ -39,14 +79,14 @@ export default function PostIdeaPage() {
   ];
 
   const addTag = () => {
-    if (tagInput.trim() && !tags.includes(tagInput.trim()) && tags.length < 5) {
-      setTags([...tags, tagInput.trim()]);
+    if (tagInput.trim() && !formData.tags.includes(tagInput.trim()) && formData.tags.length < 5) {
+      setFormData({ ...formData, tags: [...formData.tags, tagInput.trim()] });
       setTagInput('');
     }
   };
 
   const removeTag = (tag: string) => {
-    setTags(tags.filter((t) => t !== tag));
+    setFormData({ ...formData, tags: formData.tags.filter((t) => t !== tag) });
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -62,27 +102,20 @@ export default function PostIdeaPage() {
       size: file.size,
     }));
 
-    setAttachments([...attachments, ...newAttachments]);
+    setFormData({ ...formData, attachments: [...formData.attachments, ...newAttachments] });
   };
 
   const removeAttachment = (id: string) => {
-    setAttachments(attachments.filter((a) => a.id !== id));
+    setFormData({ ...formData, attachments: formData.attachments.filter((a) => a.id !== id) });
   };
 
   const checkSimilarity = () => {
-    const newIdea: Partial<Idea> = {
-      title,
-      description,
-      field,
-      college,
-      tags,
-    };
-
     const similar = ideas.filter((idea) => {
-      const titleMatch = idea.title.toLowerCase().includes(title.toLowerCase()) || title.toLowerCase().includes(idea.title.toLowerCase());
-      const fieldMatch = idea.field === field;
-      const collegeMatch = idea.college === college;
-      const tagMatch = tags.some((t) => idea.tags.includes(t));
+      const titleMatch = idea.title.toLowerCase().includes(formData.title.toLowerCase()) || 
+                         formData.title.toLowerCase().includes(idea.title.toLowerCase());
+      const fieldMatch = idea.field === formData.field;
+      const collegeMatch = idea.college === formData.college;
+      const tagMatch = formData.tags.some((t) => idea.tags.includes(t));
 
       return (titleMatch && (fieldMatch || collegeMatch)) || (fieldMatch && tagMatch);
     });
@@ -96,26 +129,26 @@ export default function PostIdeaPage() {
   };
 
   const handleSubmit = () => {
-    if (!title || !description || !college || !field) {
+    if (!formData.title || !formData.description || !formData.college || !formData.field) {
       return;
     }
 
-    if (!checkSimilarity()) {
+    if (!forceSubmit && !checkSimilarity()) {
       return;
     }
 
     const newIdea: Idea = {
       id: `idea-${Date.now()}`,
       userId: user?.id || '',
-      title,
-      description,
+      title: formData.title,
+      description: formData.description,
       type,
-      tags,
+      tags: formData.tags,
       budgetMin: type === 'sell' ? Number(budgetMin) || 0 : 0,
       budgetMax: type === 'sell' ? Number(budgetMax) || 0 : 0,
-      college,
-      field,
-      attachments,
+      college: formData.college,
+      field: formData.field,
+      attachments: formData.attachments,
       likes: 0,
       favorites: 0,
       status: 'active',
@@ -124,11 +157,12 @@ export default function PostIdeaPage() {
     };
 
     addIdea(newIdea);
+    localStorage.removeItem(STORAGE_KEY);
     navigate(`/idea/${newIdea.id}`);
   };
 
-  const canProceedStep1 = title.trim() && description.trim();
-  const canProceedStep2 = college && field && tags.length > 0;
+  const canProceedStep1 = formData.title.trim() && formData.description.trim();
+  const canProceedStep2 = formData.college && formData.field && formData.tags.length > 0;
   const canProceedStep3 = type === 'collaborate' || (budgetMin && budgetMax);
 
   return (
@@ -173,22 +207,22 @@ export default function PostIdeaPage() {
                 <Input
                   label="创意标题"
                   placeholder="用一句话概括你的创意"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  value={formData.title}
+                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   maxLength={50}
                 />
-                <p className="text-xs text-gray-400 mt-1">{title.length}/50 字</p>
+                <p className="text-xs text-gray-400 mt-1">{formData.title.length}/50 字</p>
               </div>
 
               <Textarea
                 label="详细描述"
                 placeholder="详细描述你的创意内容、适用场景、目标用户等"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 rows={6}
                 maxLength={500}
               />
-              <p className="text-xs text-gray-400">{description.length}/500 字</p>
+              <p className="text-xs text-gray-400">{formData.description.length}/500 字</p>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">上传附件</label>
@@ -208,9 +242,9 @@ export default function PostIdeaPage() {
                   </label>
                 </div>
 
-                {attachments.length > 0 && (
+                {formData.attachments.length > 0 && (
                   <div className="mt-4 space-y-2">
-                    {attachments.map((att) => (
+                    {formData.attachments.map((att) => (
                       <div
                         key={att.id}
                         className="flex items-center justify-between p-2 rounded-lg bg-gray-50"
@@ -242,14 +276,14 @@ export default function PostIdeaPage() {
                 <Select
                   label="所属学院"
                   options={[{ value: '', label: '请选择学院' }, ...collegeOptions]}
-                  value={college}
-                  onChange={(e) => setCollege(e.target.value)}
+                  value={formData.college}
+                  onChange={(e) => setFormData({ ...formData, college: e.target.value })}
                 />
                 <Select
                   label="领域分类"
                   options={[{ value: '', label: '请选择领域' }, ...fieldOptions]}
-                  value={field}
-                  onChange={(e) => setField(e.target.value)}
+                  value={formData.field}
+                  onChange={(e) => setFormData({ ...formData, field: e.target.value })}
                 />
               </div>
 
@@ -274,7 +308,7 @@ export default function PostIdeaPage() {
                   </Button>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  {tags.map((tag) => (
+                  {formData.tags.map((tag) => (
                     <Tag key={tag} variant="primary" className="cursor-pointer" onClick={() => removeTag(tag)}>
                       {tag}
                       <X className="w-3 h-3 ml-1" />
@@ -372,7 +406,7 @@ export default function PostIdeaPage() {
         </CardContent>
       </Card>
 
-      <Modal isOpen={showSimilarWarning} onClose={() => setShowSimilarWarning(false)} title="相似创意提示" size="lg">
+      <Modal isOpen={showSimilarWarning} onClose={() => { setShowSimilarWarning(false); setForceSubmit(false); }} title="相似创意提示" size="lg">
         <div className="space-y-4">
           <div className="flex items-center gap-2 p-3 rounded-xl bg-[#F59E0B]/10 text-[#F59E0B]">
             <AlertTriangle className="w-5 h-5" />
@@ -393,10 +427,10 @@ export default function PostIdeaPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Button variant="ghost" onClick={() => setShowSimilarWarning(false)} className="flex-1">
+            <Button variant="ghost" onClick={() => { setShowSimilarWarning(false); setForceSubmit(false); }} className="flex-1">
               取消发布
             </Button>
-            <Button variant="primary" onClick={() => setShowSimilarWarning(false)} className="flex-1">
+            <Button variant="primary" onClick={() => { setForceSubmit(true); setShowSimilarWarning(false); handleSubmit(); }} className="flex-1">
               继续发布
             </Button>
           </div>

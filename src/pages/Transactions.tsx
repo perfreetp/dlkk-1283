@@ -1,16 +1,26 @@
-import { History, CheckCircle, Clock, XCircle, DollarSign, ArrowRight } from 'lucide-react';
+import { History, CheckCircle, Clock, XCircle, DollarSign, ArrowRight, Star, ThumbsUp } from 'lucide-react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Avatar } from '@/components/common/Avatar';
 import { Tag } from '@/components/common/Tag';
+import { Button } from '@/components/common/Button';
+import { Modal } from '@/components/common/Modal';
+import { Textarea } from '@/components/common/Textarea';
 import { useStore } from '@/store';
-import { mockTransactions } from '@/data/mockData';
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
+import type { TransactionReview } from '@/types';
 
 export default function TransactionsPage() {
-  const { user, getUserById, getIdeaById } = useStore();
-  const myTransactions = mockTransactions.filter(
-    (tx) => tx.buyerId === user?.id || tx.sellerId === user?.id
-  );
+  const { user, getUserById, getIdeaById, getUserTransactions, submitReview, transactions } = useStore();
+  const myTransactions = getUserTransactions();
+
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [selectedTransaction, setSelectedTransaction] = useState<typeof myTransactions[0] | null>(null);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewResponse, setReviewResponse] = useState(5);
+  const [reviewQuality, setReviewQuality] = useState(5);
+  const [reviewCommunication, setReviewCommunication] = useState(5);
+  const [reviewComment, setReviewComment] = useState('');
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -46,6 +56,62 @@ export default function TransactionsPage() {
     });
   };
 
+  const handleOpenReview = (tx: typeof myTransactions[0]) => {
+    setSelectedTransaction(tx);
+    setShowReviewModal(true);
+  };
+
+  const handleSubmitReview = () => {
+    if (!selectedTransaction || !user) return;
+
+    const otherUserId = selectedTransaction.buyerId === user.id 
+      ? selectedTransaction.sellerId 
+      : selectedTransaction.buyerId;
+
+    const hasReviewed = selectedTransaction.reviews.some(
+      r => r.fromUserId === user.id && r.toUserId === otherUserId
+    );
+
+    if (hasReviewed) {
+      setShowReviewModal(false);
+      return;
+    }
+
+    const review: TransactionReview = {
+      id: `review-${Date.now()}`,
+      fromUserId: user.id,
+      toUserId: otherUserId,
+      rating: reviewRating,
+      dimensions: {
+        response: reviewResponse,
+        quality: reviewQuality,
+        communication: reviewCommunication,
+      },
+      comment: reviewComment,
+      createdAt: new Date().toISOString(),
+    };
+
+    submitReview(selectedTransaction.id, review);
+    setShowReviewModal(false);
+    setReviewRating(5);
+    setReviewResponse(5);
+    setReviewQuality(5);
+    setReviewCommunication(5);
+    setReviewComment('');
+    setSelectedTransaction(null);
+  };
+
+  const canSubmitReview = (tx: typeof myTransactions[0]) => {
+    if (!user || tx.status !== 'completed') return false;
+    
+    const otherUserId = tx.buyerId === user.id ? tx.sellerId : tx.buyerId;
+    const hasReviewed = tx.reviews.some(
+      r => r.fromUserId === user.id && r.toUserId === otherUserId
+    );
+    
+    return !hasReviewed;
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -62,6 +128,9 @@ export default function TransactionsPage() {
           const other = isBuyer ? seller : buyer;
           const StatusIcon = getStatusIcon(tx.status);
 
+          const otherUserId = tx.buyerId === user?.id ? tx.sellerId : tx.buyerId;
+          const userReview = tx.reviews.find(r => r.fromUserId === user?.id && r.toUserId === otherUserId);
+
           return (
             <Card key={tx.id}>
               <CardContent className="p-4">
@@ -76,7 +145,7 @@ export default function TransactionsPage() {
                     </div>
 
                     <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                      {idea?.title || '未知创意'}
+                      {tx.ideaTitle || idea?.title || '未知创意'}
                     </h3>
 
                     <div className="flex items-center gap-4 text-sm">
@@ -91,8 +160,8 @@ export default function TransactionsPage() {
                       </div>
                     </div>
 
-                    <div className="mt-3">
-                      <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
+                    <div className="mt-4">
+                      <div className="flex items-center gap-2 text-sm text-gray-500 mb-3">
                         <span>交易阶段：</span>
                       </div>
                       <div className="flex items-center gap-2">
@@ -110,14 +179,72 @@ export default function TransactionsPage() {
                             </div>
                             {index < tx.stages.length - 1 && (
                               <div className={cn(
-                                'w-4 h-0.5',
+                                'w-8 h-0.5',
                                 stage.status === 'confirmed' ? 'bg-[#10B981]' : 'bg-gray-200'
                               )} />
                             )}
                           </div>
                         ))}
                       </div>
+                      <div className="flex items-center gap-4 mt-2 text-xs text-gray-400">
+                        {tx.stages.map((stage, index) => (
+                          <span key={stage.id} className={cn(
+                            stage.status === 'confirmed' && 'text-[#10B981]'
+                          )}>
+                            {stage.name}
+                          </span>
+                        ))}
+                      </div>
                     </div>
+
+                    {tx.reviews.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-gray-100">
+                        <p className="text-sm font-medium text-gray-700 mb-2">评价记录</p>
+                        {tx.reviews.map((review) => {
+                          const reviewer = getUserById(review.fromUserId);
+                          const reviewee = getUserById(review.toUserId);
+                          return (
+                            <div key={review.id} className="flex items-center gap-2 text-sm">
+                              <Avatar src={reviewer?.avatar} size="sm" fallback={reviewer?.nickname?.[0]} />
+                              <span className="text-gray-600">{reviewer?.nickname}</span>
+                              <span className="text-gray-400">评价</span>
+                              <span className="text-gray-600">{reviewee?.nickname}</span>
+                              <div className="flex items-center gap-0.5 ml-2">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Star
+                                    key={star}
+                                    className={cn(
+                                      'w-3 h-3',
+                                      star <= review.rating ? 'fill-[#F59E0B] text-[#F59E0B]' : 'text-gray-300'
+                                    )}
+                                  />
+                                ))}
+                              </div>
+                              <span className="text-xs text-gray-400 ml-2">{review.comment.slice(0, 20)}...</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {canSubmitReview(tx) && (
+                      <Button 
+                        variant="primary" 
+                        size="sm" 
+                        className="mt-4"
+                        onClick={() => handleOpenReview(tx)}
+                      >
+                        <ThumbsUp className="w-4 h-4 mr-2" />
+                        给对方评分
+                      </Button>
+                    )}
+
+                    {userReview && (
+                      <div className="mt-2 flex items-center gap-2 text-sm text-[#10B981]">
+                        <CheckCircle className="w-4 h-4" />
+                        已评价
+                      </div>
+                    )}
                   </div>
 
                   <div className="text-right shrink-0">
@@ -143,6 +270,113 @@ export default function TransactionsPage() {
           </div>
         )}
       </div>
+
+      <Modal isOpen={showReviewModal} onClose={() => setShowReviewModal(false)} title="评价交易" size="md">
+        {selectedTransaction && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-500">
+              请对交易伙伴进行评价，你的评价会影响对方的信用分。
+            </p>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">总体评分</label>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => setReviewRating(star)}
+                    className="p-1 hover:scale-110 transition-transform"
+                  >
+                    <Star
+                      className={cn(
+                        'w-8 h-8',
+                        star <= reviewRating ? 'fill-[#F59E0B] text-[#F59E0B]' : 'text-gray-300'
+                      )}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">响应速度</label>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => setReviewResponse(star)}
+                    className="p-1 hover:scale-110 transition-transform"
+                  >
+                    <Star
+                      className={cn(
+                        'w-6 h-6',
+                        star <= reviewResponse ? 'fill-[#F59E0B] text-[#F59E0B]' : 'text-gray-300'
+                      )}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">交付质量</label>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => setReviewQuality(star)}
+                    className="p-1 hover:scale-110 transition-transform"
+                  >
+                    <Star
+                      className={cn(
+                        'w-6 h-6',
+                        star <= reviewQuality ? 'fill-[#F59E0B] text-[#F59E0B]' : 'text-gray-300'
+                      )}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">沟通态度</label>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => setReviewCommunication(star)}
+                    className="p-1 hover:scale-110 transition-transform"
+                  >
+                    <Star
+                      className={cn(
+                        'w-6 h-6',
+                        star <= reviewCommunication ? 'fill-[#F59E0B] text-[#F59E0B]' : 'text-gray-300'
+                      )}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <Textarea
+              label="评价内容"
+              placeholder="请简要描述你的交易体验（选填）"
+              value={reviewComment}
+              onChange={(e) => setReviewComment(e.target.value)}
+              rows={3}
+            />
+
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" onClick={() => setShowReviewModal(false)} className="flex-1">
+                取消
+              </Button>
+              <Button variant="primary" onClick={handleSubmitReview} className="flex-1">
+                提交评价
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

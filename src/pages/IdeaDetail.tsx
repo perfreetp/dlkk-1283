@@ -1,5 +1,5 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Heart, Share2, Flag, MessageSquare, Send, Download, Eye, Image, FileText, File, AlertTriangle, CheckCircle } from 'lucide-react';
+import { ArrowLeft, Heart, Share2, Flag, MessageSquare, Send, Download, AlertTriangle, CheckCircle, DollarSign } from 'lucide-react';
 import { useState } from 'react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Button } from '@/components/common/Button';
@@ -11,12 +11,12 @@ import { Textarea } from '@/components/common/Textarea';
 import { IdeaCard } from '@/components/idea/IdeaCard';
 import { useStore } from '@/store';
 import { cn } from '@/lib/utils';
-import type { Message } from '@/types';
+import type { Offer } from '@/types';
 
 export default function IdeaDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getIdeaById, getUserById, isFavorite, likeIdea, unlikeIdea, favoriteIdea, unfavoriteIdea, addChat, sendMessage, user, ideas } = useStore();
+  const { getIdeaById, getUserById, isFavorite, favoriteIdea, unfavoriteIdea, addChat, submitOffer, addReport, user, ideas } = useStore();
 
   const idea = getIdeaById(id || '');
   const author = idea ? getUserById(idea.userId) : null;
@@ -28,6 +28,7 @@ export default function IdeaDetailPage() {
   const [offerAmount, setOfferAmount] = useState('');
   const [offerMessage, setOfferMessage] = useState('');
   const [reportReason, setReportReason] = useState('');
+  const [reportSubmitted, setReportSubmitted] = useState(false);
 
   if (!idea || !author) {
     return (
@@ -40,10 +41,6 @@ export default function IdeaDetailPage() {
     );
   }
 
-  const handleLike = () => {
-    likeIdea(idea.id);
-  };
-
   const handleFavorite = () => {
     if (favorite) {
       unfavoriteIdea(idea.id);
@@ -53,8 +50,10 @@ export default function IdeaDetailPage() {
   };
 
   const handleStartChat = () => {
+    if (!user || !author) return;
+    
     const existingChat = useStore.getState().chats.find(
-      (c) => c.participantIds.includes(user?.id || '') && c.participantIds.includes(author.id) && c.ideaId === idea.id
+      (c) => c.participantIds.includes(user.id) && c.participantIds.includes(author.id) && c.ideaId === idea.id
     );
 
     if (existingChat) {
@@ -64,9 +63,10 @@ export default function IdeaDetailPage() {
 
     const newChat = {
       id: `chat-${Date.now()}`,
-      participantIds: [user?.id || '', author.id],
+      participantIds: [user.id, author.id],
       ideaId: idea.id,
       messages: [],
+      offers: [],
       lastMessageAt: new Date().toISOString(),
     };
     addChat(newChat);
@@ -74,38 +74,73 @@ export default function IdeaDetailPage() {
   };
 
   const handleSubmitOffer = () => {
-    if (!offerAmount || !offerMessage) return;
+    if (!offerAmount || !offerMessage || !user || !author) return;
 
-    const systemMessage: Message = {
-      id: `msg-${Date.now()}`,
-      chatId: '',
-      senderId: user?.id || '',
-      content: `报价 ¥${offerAmount}：${offerMessage}`,
-      type: 'system',
-      read: false,
+    const existingChat = useStore.getState().chats.find(
+      (c) => c.participantIds.includes(user.id) && c.participantIds.includes(author.id) && c.ideaId === idea.id
+    );
+
+    let chatId: string;
+    
+    if (existingChat) {
+      chatId = existingChat.id;
+    } else {
+      chatId = `chat-${Date.now()}`;
+      const newChat = {
+        id: chatId,
+        participantIds: [user.id, author.id],
+        ideaId: idea.id,
+        messages: [],
+        offers: [],
+        lastMessageAt: new Date().toISOString(),
+      };
+      addChat(newChat);
+    }
+
+    const offer: Offer = {
+      id: `offer-${Date.now()}`,
+      ideaId: idea.id,
+      buyerId: user.id,
+      sellerId: author.id,
+      amount: Number(offerAmount),
+      message: offerMessage,
+      status: 'pending',
       createdAt: new Date().toISOString(),
     };
 
-    handleStartChat();
+    submitOffer(chatId, offer);
     setShowOfferModal(false);
     setOfferAmount('');
     setOfferMessage('');
+    
+    navigate(`/chat/${chatId}`);
   };
 
   const handleReport = () => {
-    if (!reportReason) return;
-    setShowReportModal(false);
+    if (!reportReason || !user || !idea) return;
+    
+    addReport({
+      id: `report-${Date.now()}`,
+      reporterId: user.id,
+      ideaId: idea.id,
+      ideaTitle: idea.title,
+      reason: reportReason,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    });
+    
+    setReportSubmitted(true);
     setReportReason('');
   };
 
   const getAttachmentIcon = (type: string) => {
     switch (type) {
       case 'image':
-        return Image;
+        return '🖼️';
       case 'pdf':
-        return FileText;
+        return '📄';
       default:
-        return File;
+        return '📎';
     }
   };
 
@@ -186,24 +221,21 @@ export default function IdeaDetailPage() {
               <CardContent className="p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">附件资料</h3>
                 <div className="space-y-3">
-                  {idea.attachments.map((att) => {
-                    const Icon = getAttachmentIcon(att.type);
-                    return (
-                      <div
-                        key={att.id}
-                        className="flex items-center justify-between p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors"
-                      >
-                        <div className="flex items-center gap-3">
-                          <Icon className="w-5 h-5 text-gray-400" />
-                          <span className="text-sm text-gray-700">{att.name}</span>
-                          <span className="text-xs text-gray-400">{(att.size / 1024).toFixed(1)} KB</span>
-                        </div>
-                        <Button variant="ghost" size="sm">
-                          <Download className="w-4 h-4" />
-                        </Button>
+                  {idea.attachments.map((att) => (
+                    <div
+                      key={att.id}
+                      className="flex items-center justify-between p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg">{getAttachmentIcon(att.type)}</span>
+                        <span className="text-sm text-gray-700">{att.name}</span>
+                        <span className="text-xs text-gray-400">{(att.size / 1024).toFixed(1)} KB</span>
                       </div>
-                    );
-                  })}
+                      <Button variant="ghost" size="sm">
+                        <Download className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ))}
                 </div>
               </CardContent>
             </Card>
@@ -292,11 +324,6 @@ export default function IdeaDetailPage() {
                   {favorite ? '已收藏' : '收藏'}
                 </Button>
 
-                <Button variant="ghost" className="w-full" onClick={handleLike}>
-                  <Heart className="w-4 h-4 mr-2" />
-                  点赞
-                </Button>
-
                 <Button variant="ghost" className="w-full">
                   <Share2 className="w-4 h-4 mr-2" />
                   分享
@@ -314,12 +341,12 @@ export default function IdeaDetailPage() {
             <Card className="border-2 border-[#FF6B35]/20">
               <CardContent className="p-6">
                 <div className="flex items-center gap-2 mb-4">
-                  <CheckCircle className="w-5 h-5 text-[#FF6B35]" />
+                  <DollarSign className="w-5 h-5 text-[#FF6B35]" />
                   <h3 className="font-semibold text-gray-900">提交报价</h3>
                 </div>
 
                 <p className="text-sm text-gray-500 mb-4">
-                  如果你对这个创意感兴趣，可以提交报价与发布者沟通。
+                  如果你对这个创意感兴趣，可以提交报价与发布者沟通。报价被接受后会自动生成交易。
                 </p>
 
                 <Button variant="primary" className="w-full" onClick={() => setShowOfferModal(true)}>
@@ -352,34 +379,47 @@ export default function IdeaDetailPage() {
             <Button variant="ghost" onClick={() => setShowOfferModal(false)} className="flex-1">
               取消
             </Button>
-            <Button variant="primary" onClick={handleSubmitOffer} className="flex-1">
+            <Button variant="primary" onClick={handleSubmitOffer} className="flex-1" disabled={!offerAmount || !offerMessage}>
               提交报价
             </Button>
           </div>
         </div>
       </Modal>
 
-      <Modal isOpen={showReportModal} onClose={() => setShowReportModal(false)} title="举报内容" size="md">
+      <Modal isOpen={showReportModal} onClose={() => { setShowReportModal(false); setReportSubmitted(false); }} title="举报内容" size="md">
         <div className="space-y-4">
-          <div className="flex items-center gap-2 p-3 rounded-xl bg-[#EF4444]/10 text-[#EF4444]">
-            <AlertTriangle className="w-5 h-5" />
-            <span className="text-sm">举报将提交给管理员审核，请确保举报理由真实有效。</span>
-          </div>
-          <Textarea
-            label="举报理由"
-            placeholder="请详细说明举报理由，如抄袭、虚假信息等"
-            value={reportReason}
-            onChange={(e) => setReportReason(e.target.value)}
-            rows={4}
-          />
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" onClick={() => setShowReportModal(false)} className="flex-1">
-              取消
-            </Button>
-            <Button variant="danger" onClick={handleReport} className="flex-1">
-              提交举报
-            </Button>
-          </div>
+          {reportSubmitted ? (
+            <div className="text-center py-6">
+              <CheckCircle className="w-12 h-12 text-[#10B981] mx-auto mb-3" />
+              <p className="text-lg font-medium text-gray-900 mb-2">举报已提交</p>
+              <p className="text-sm text-gray-500">感谢你的反馈，我们会尽快审核处理</p>
+              <Button variant="primary" onClick={() => { setShowReportModal(false); setReportSubmitted(false); }} className="mt-4">
+                确定
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-[#EF4444]/10 text-[#EF4444]">
+                <AlertTriangle className="w-5 h-5" />
+                <span className="text-sm">举报将提交给管理员审核，请确保举报理由真实有效。</span>
+              </div>
+              <Textarea
+                label="举报理由"
+                placeholder="请详细说明举报理由，如抄袭、虚假信息等"
+                value={reportReason}
+                onChange={(e) => setReportReason(e.target.value)}
+                rows={4}
+              />
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" onClick={() => setShowReportModal(false)} className="flex-1">
+                  取消
+                </Button>
+                <Button variant="danger" onClick={handleReport} className="flex-1" disabled={!reportReason}>
+                  提交举报
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </Modal>
 

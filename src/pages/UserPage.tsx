@@ -6,17 +6,18 @@ import { Badge } from '@/components/common/Badge';
 import { Button } from '@/components/common/Button';
 import { IdeaCard } from '@/components/idea/IdeaCard';
 import { useStore } from '@/store';
-import { mockReviews } from '@/data/mockData';
 import { cn } from '@/lib/utils';
 
 export default function UserPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getUserById, ideas } = useStore();
+  const { getUserById, ideas, transactions } = useStore();
 
   const user = getUserById(id || '');
   const userIdeas = ideas.filter((idea) => idea.userId === id);
-  const userReviews = mockReviews.filter((review) => review.toUserId === id);
+  const userReviews = transactions
+    .filter((tx) => tx.buyerId === id || tx.sellerId === id)
+    .flatMap((tx) => tx.reviews.filter((r) => r.toUserId === id));
 
   if (!user) {
     return (
@@ -28,6 +29,23 @@ export default function UserPage() {
       </div>
     );
   }
+
+  const calculateCredit = () => {
+    if (userReviews.length === 0) {
+      return { score: 80, positiveRate: 100 };
+    }
+    const avgRating = userReviews.reduce((sum, r) => sum + r.rating, 0) / userReviews.length;
+    const positiveCount = userReviews.filter((r) => r.rating >= 4).length;
+    const positiveRate = Math.round((positiveCount / userReviews.length) * 100);
+    const baseScore = Math.round(avgRating * 10);
+    const transactionBonus = Math.min(user.transactionCount * 2, 20);
+    const positiveBonus = Math.round(positiveRate / 10);
+    const totalScore = Math.min(100, baseScore + transactionBonus + positiveBonus);
+    return { score: totalScore, positiveRate };
+  };
+
+  const { score: dynamicScore, positiveRate } = calculateCredit();
+  const displayScore = id === user.id && user.reviewCount > 0 ? user.creditScore : dynamicScore;
 
   const getCreditColor = (score: number) => {
     if (score >= 90) return 'text-[#10B981]';
@@ -48,7 +66,7 @@ export default function UserPage() {
         返回
       </Button>
 
-      <Card className={cn('overflow-hidden bg-gradient-to-br', getCreditBg(user.creditScore))}>
+      <Card className={cn('overflow-hidden bg-gradient-to-br', getCreditBg(displayScore))}>
         <CardContent className="p-8">
           <div className="flex flex-col md:flex-row items-center gap-6">
             <Avatar src={user.avatar} size="xl" fallback={user.nickname[0]} />
@@ -59,8 +77,8 @@ export default function UserPage() {
 
               <div className="flex items-center gap-4 justify-center md:justify-start">
                 <div className="text-center">
-                  <div className={cn('text-3xl font-bold', getCreditColor(user.creditScore))}>
-                    {user.creditScore}
+                  <div className={cn('text-3xl font-bold', getCreditColor(displayScore))}>
+                    {displayScore}
                   </div>
                   <p className="text-xs text-gray-400">信用分</p>
                 </div>
@@ -115,10 +133,10 @@ export default function UserPage() {
             <CardContent className="p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">收到的评价</h2>
               <div className="space-y-4">
-                {userReviews.slice(0, 5).map((review) => {
+                {userReviews.slice(0, 5).map((review, index) => {
                   const reviewer = getUserById(review.fromUserId);
                   return (
-                    <div key={review.id} className="p-4 rounded-xl bg-gray-50">
+                    <div key={`${review.id}-${index}`} className="p-4 rounded-xl bg-gray-50">
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <Avatar src={reviewer?.avatar} size="sm" fallback={reviewer?.nickname?.[0]} />
@@ -136,19 +154,21 @@ export default function UserPage() {
                           ))}
                         </div>
                       </div>
-                      <p className="text-sm text-gray-600">{review.comment}</p>
+                      {review.comment && (
+                        <p className="text-sm text-gray-600">{review.comment}</p>
+                      )}
                       <div className="flex items-center gap-4 mt-2 text-xs text-gray-400">
                         <span className="flex items-center gap-1">
                           <ThumbsUp className="w-3 h-3" />
-                          响应速度 {review.dimensions.response}
+                          响应 {review.dimensions.response}
                         </span>
                         <span className="flex items-center gap-1">
                           <CheckCircle className="w-3 h-3" />
-                          交付质量 {review.dimensions.quality}
+                          质量 {review.dimensions.quality}
                         </span>
                         <span className="flex items-center gap-1">
                           <MessageSquare className="w-3 h-3" />
-                          沟通态度 {review.dimensions.communication}
+                          沟通 {review.dimensions.communication}
                         </span>
                       </div>
                     </div>
@@ -172,7 +192,7 @@ export default function UserPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-500">基础评分</span>
                   <span className="font-medium text-gray-900">
-                    {Math.round(user.creditScore * 0.6)}
+                    {Math.round(displayScore * 0.6)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -182,16 +202,16 @@ export default function UserPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-500">活跃加分</span>
+                  <span className="text-sm text-gray-500">好评率</span>
                   <span className="font-medium text-[#10B981]">
-                    +{user.badges.length * 2}
+                    +{positiveRate}%
                   </span>
                 </div>
                 <div className="pt-4 border-t border-gray-100">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-900">总分</span>
-                    <span className={cn('text-xl font-bold', getCreditColor(user.creditScore))}>
-                      {user.creditScore}
+                    <span className={cn('text-xl font-bold', getCreditColor(displayScore))}>
+                      {displayScore}
                     </span>
                   </div>
                 </div>
@@ -234,7 +254,7 @@ export default function UserPage() {
                 <div className="flex items-center gap-3">
                   <Award className="w-5 h-5 text-[#FF6B35]" />
                   <span className="text-sm text-gray-600">好评率</span>
-                  <span className="text-sm font-medium text-[#10B981]">98%</span>
+                  <span className="text-sm font-medium text-[#10B981]">{positiveRate}%</span>
                 </div>
               </div>
             </CardContent>
