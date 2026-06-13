@@ -1,4 +1,4 @@
-import { History, CheckCircle, Clock, XCircle, DollarSign, ArrowRight, Star, ThumbsUp, Shield, FileText, User, Calendar, Link2 } from 'lucide-react';
+import { History, CheckCircle, Clock, XCircle, DollarSign, ArrowRight, Star, ThumbsUp, Shield, FileText, User, Calendar, Link2, AlertTriangle, Download, Eye, MessageCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Avatar } from '@/components/common/Avatar';
 import { Tag } from '@/components/common/Tag';
@@ -8,7 +8,7 @@ import { Textarea } from '@/components/common/Textarea';
 import { useStore } from '@/store';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
-import type { TransactionReview, Stage } from '@/types';
+import type { TransactionReview, Stage, Deliverable, DisputeResponse, DisputeEvidence } from '@/types';
 
 export default function TransactionsPage() {
   const { user, getUserById, getIdeaById, getUserTransactions, submitReview, transactions } = useStore();
@@ -22,6 +22,10 @@ export default function TransactionsPage() {
   const [reviewCommunication, setReviewCommunication] = useState(5);
   const [reviewComment, setReviewComment] = useState('');
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
+  const [showDeliverableModal, setShowDeliverableModal] = useState(false);
+  const [selectedDeliverables, setSelectedDeliverables] = useState<Deliverable[]>([]);
+  const [showDisputeModal, setShowDisputeModal] = useState(false);
+  const [selectedDisputeTx, setSelectedDisputeTx] = useState<typeof myTransactions[0] | null>(null);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -31,6 +35,8 @@ export default function TransactionsPage() {
         return Clock;
       case 'cancelled':
         return XCircle;
+      case 'disputed':
+        return AlertTriangle;
       default:
         return Clock;
     }
@@ -43,6 +49,8 @@ export default function TransactionsPage() {
       case 'in_progress':
         return 'text-[#F59E0B]';
       case 'cancelled':
+        return 'text-[#EF4444]';
+      case 'disputed':
         return 'text-[#EF4444]';
       default:
         return 'text-gray-400';
@@ -62,6 +70,21 @@ export default function TransactionsPage() {
     }
   };
 
+  const getDisputeStatusInfo = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return { icon: Clock, color: 'text-[#F59E0B]', bg: 'bg-[#F59E0B]/10', label: '待处理' };
+      case 'processing':
+        return { icon: MessageCircle, color: 'text-[#2D5BFF]', bg: 'bg-[#2D5BFF]/10', label: '处理中' };
+      case 'resolved':
+        return { icon: CheckCircle, color: 'text-[#10B981]', bg: 'bg-[#10B981]/10', label: '已解决' };
+      case 'refunded':
+        return { icon: XCircle, color: 'text-[#EF4444]', bg: 'bg-[#EF4444]/10', label: '已退款' };
+      default:
+        return { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-100', label: '未知' };
+    }
+  };
+
   const getStageStatusInfo = (status: string) => {
     switch (status) {
       case 'confirmed':
@@ -70,6 +93,8 @@ export default function TransactionsPage() {
         return { label: '待确认', color: 'bg-[#F59E0B] text-white' };
       case 'in_progress':
         return { label: '进行中', color: 'bg-[#2D5BFF] text-white' };
+      case 'disputed':
+        return { label: '有争议', color: 'bg-[#EF4444] text-white' };
       default:
         return { label: '待开始', color: 'bg-gray-100 text-gray-400' };
     }
@@ -83,6 +108,12 @@ export default function TransactionsPage() {
       hour: '2-digit',
       minute: '2-digit',
     });
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   };
 
   const handleOpenReview = (tx: typeof myTransactions[0]) => {
@@ -141,6 +172,16 @@ export default function TransactionsPage() {
     return !hasReviewed;
   };
 
+  const handleViewDeliverables = (deliverables: Deliverable[]) => {
+    setSelectedDeliverables(deliverables);
+    setShowDeliverableModal(true);
+  };
+
+  const handleViewDispute = (tx: typeof myTransactions[0]) => {
+    setSelectedDisputeTx(tx);
+    setShowDisputeModal(true);
+  };
+
   const StageDetailCard = ({ stage, index, tx }: { stage: Stage; index: number; tx: typeof myTransactions[0] }) => {
     const isExpanded = expandedStage === stage.id;
     const statusInfo = getStageStatusInfo(stage.status);
@@ -167,10 +208,16 @@ export default function TransactionsPage() {
                 {statusInfo.label}
               </span>
               {stage.deliverables.length > 0 && (
-                <span className="text-xs text-gray-400 flex items-center gap-1">
-                  <FileText className="w-3 h-3" />
-                  {stage.deliverables.length}
-                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleViewDeliverables(stage.deliverables);
+                  }}
+                  className="p-1 rounded hover:bg-gray-200"
+                  title="查看交付物"
+                >
+                  <Eye className="w-3 h-3 text-[#2D5BFF]" />
+                </button>
               )}
             </div>
           </div>
@@ -205,10 +252,15 @@ export default function TransactionsPage() {
                         <p className="text-sm font-medium text-gray-900">{d.name}</p>
                         {d.description && <p className="text-xs text-gray-400">{d.description}</p>}
                       </div>
-                      {d.url && (
-                        <a href={d.url} target="_blank" rel="noopener noreferrer" className="text-xs text-[#2D5BFF] flex items-center gap-1">
-                          <Link2 className="w-3 h-3" />
-                          查看
+                      {d.fileSize && <span className="text-xs text-gray-400">{formatFileSize(d.fileSize)}</span>}
+                      {d.fileData && (
+                        <a 
+                          href={d.fileData} 
+                          download={d.name}
+                          className="text-xs text-[#2D5BFF] flex items-center gap-1"
+                        >
+                          <Download className="w-3 h-3" />
+                          下载
                         </a>
                       )}
                     </div>
@@ -268,8 +320,12 @@ export default function TransactionsPage() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <StatusIcon className={cn('w-5 h-5', getStatusColor(tx.status))} />
-                      <Tag variant={tx.status === 'completed' ? 'success' : tx.status === 'in_progress' ? 'warning' : 'danger'}>
-                        {tx.status === 'completed' ? '已完成' : tx.status === 'in_progress' ? '进行中' : '已取消'}
+                      <Tag variant={
+                        tx.status === 'completed' ? 'success' : 
+                        tx.status === 'disputed' ? 'danger' : 
+                        tx.status === 'in_progress' ? 'warning' : 'default'
+                      }>
+                        {tx.status === 'completed' ? '已完成' : tx.status === 'disputed' ? '争议中' : tx.status === 'in_progress' ? '进行中' : '待付款'}
                       </Tag>
                       <span className="text-xs text-gray-400">{formatDate(tx.createdAt)}</span>
                     </div>
@@ -302,27 +358,80 @@ export default function TransactionsPage() {
                   </div>
                 </div>
 
-                <div className={cn('p-3 rounded-xl mb-4', paymentInfo.bg)}>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <paymentInfo.icon className={cn('w-5 h-5', paymentInfo.color)} />
-                      <span className={cn('font-medium', paymentInfo.color)}>{paymentInfo.label}</span>
+                <div className="mb-4">
+                  <div className={cn('p-4 rounded-xl', paymentInfo.bg)}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <paymentInfo.icon className={cn('w-5 h-5', paymentInfo.color)} />
+                        <span className={cn('font-medium', paymentInfo.color)}>{paymentInfo.label}</span>
+                      </div>
+                      <span className="text-xs text-gray-400">
+                        {tx.paymentStatus === 'settled' && tx.settlement?.method === 'auto' ? '自动结算' : 
+                         tx.paymentStatus === 'settled' && tx.settlement?.method === 'manual' ? '手动结算' : ''}
+                      </span>
                     </div>
-                    <div className="flex items-center gap-4 text-xs text-gray-500">
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                      <div className="p-2 rounded-lg bg-white/50">
+                        <p className="text-gray-400">创建时间</p>
+                        <p className="text-gray-700 font-medium">{formatDate(tx.createdAt)}</p>
+                      </div>
                       {tx.paidAt && (
-                        <span>付款时间：{formatDate(tx.paidAt)}</span>
+                        <div className="p-2 rounded-lg bg-white/50">
+                          <p className="text-gray-400">付款时间</p>
+                          <p className="text-gray-700 font-medium">{formatDate(tx.paidAt)}</p>
+                        </div>
+                      )}
+                      {tx.escrowAt && (
+                        <div className="p-2 rounded-lg bg-white/50">
+                          <p className="text-gray-400">托管时间</p>
+                          <p className="text-gray-700 font-medium">{formatDate(tx.escrowAt)}</p>
+                        </div>
+                      )}
+                      {tx.settlement?.stageCompletedAt && (
+                        <div className="p-2 rounded-lg bg-white/50">
+                          <p className="text-gray-400">交付确认</p>
+                          <p className="text-gray-700 font-medium">{formatDate(tx.settlement.stageCompletedAt)}</p>
+                        </div>
                       )}
                       {tx.settledAt && (
-                        <span>结算时间：{formatDate(tx.settledAt)}</span>
+                        <div className="p-2 rounded-lg bg-white/50">
+                          <p className="text-gray-400">结算到账</p>
+                          <p className="text-[#10B981] font-medium">{formatDate(tx.settledAt)}</p>
+                        </div>
                       )}
                     </div>
-                  </div>
-                  <div className="mt-2 text-sm text-gray-600">
-                    {tx.paymentStatus === 'unpaid' && '买方尚未确认付款，交易等待开始'}
-                    {tx.paymentStatus === 'escrow' && '资金已托管，交易正在进行中'}
-                    {tx.paymentStatus === 'settled' && '交易已完成，资金已结算给卖方'}
+
+                    <div className="mt-2 text-sm text-gray-600">
+                      {tx.paymentStatus === 'unpaid' && '买方尚未确认付款，交易等待开始'}
+                      {tx.paymentStatus === 'escrow' && '资金已托管，交易正在进行中'}
+                      {tx.paymentStatus === 'settled' && '交易已完成，资金已结算给卖方'}
+                    </div>
                   </div>
                 </div>
+
+                {tx.dispute && (
+                  <div className="mb-4">
+                    <button
+                      onClick={() => handleViewDispute(tx)}
+                      className={cn('w-full p-3 rounded-xl text-left', getDisputeStatusInfo(tx.dispute.status).bg)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            const info = getDisputeStatusInfo(tx.dispute.status);
+                            return <info.icon className={cn('w-4 h-4', info.color)} />;
+                          })()}
+                          <span className={cn('font-medium', getDisputeStatusInfo(tx.dispute.status).color)}>
+                            争议：{getDisputeStatusInfo(tx.dispute.status).label}
+                          </span>
+                        </div>
+                        <span className="text-xs text-gray-500">点击查看详情</span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1 truncate">{tx.dispute.reason}</p>
+                    </button>
+                  </div>
+                )}
 
                 <div className="mb-4">
                   <p className="text-sm font-medium text-gray-700 mb-3">交易阶段进度</p>
@@ -500,6 +609,124 @@ export default function TransactionsPage() {
                 提交评价
               </Button>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal isOpen={showDeliverableModal} onClose={() => { setShowDeliverableModal(false); setSelectedDeliverables([]); }} title="交付物详情" size="lg">
+        <div className="space-y-3">
+          {selectedDeliverables.map((d) => (
+            <div key={d.id} className="p-4 rounded-xl bg-gray-50">
+              <div className="flex items-center gap-2 mb-2">
+                <FileText className="w-5 h-5 text-[#2D5BFF]" />
+                <span className="font-medium text-gray-900">{d.name}</span>
+                {d.fileSize && <span className="text-xs text-gray-400">{formatFileSize(d.fileSize)}</span>}
+              </div>
+              {d.description && <p className="text-sm text-gray-500 mb-2">{d.description}</p>}
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <span>上传者：{getUserById(d.uploadedBy)?.nickname}</span>
+                <span>时间：{formatDate(d.uploadedAt)}</span>
+              </div>
+              {d.fileData && d.fileType === 'image' && (
+                <div className="mt-3 rounded-lg overflow-hidden">
+                  <img src={d.fileData} alt={d.name} className="max-w-full h-auto" />
+                </div>
+              )}
+              {d.fileData && d.fileType !== 'image' && (
+                <div className="mt-3">
+                  <a 
+                    href={d.fileData} 
+                    download={d.name}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[#2D5BFF]/10 text-[#2D5BFF] text-sm hover:bg-[#2D5BFF]/20"
+                  >
+                    <Download className="w-4 h-4" />
+                    下载文件
+                  </a>
+                </div>
+              )}
+            </div>
+          ))}
+          {selectedDeliverables.length === 0 && (
+            <p className="text-center text-gray-500 py-4">暂无交付物</p>
+          )}
+        </div>
+      </Modal>
+
+      <Modal isOpen={showDisputeModal} onClose={() => { setShowDisputeModal(false); setSelectedDisputeTx(null); }} title="争议详情" size="lg">
+        {selectedDisputeTx?.dispute && (
+          <div className="space-y-4">
+            <div className={cn('p-4 rounded-xl', getDisputeStatusInfo(selectedDisputeTx.dispute.status).bg)}>
+              <div className="flex items-center gap-2">
+                {(() => {
+                  const info = getDisputeStatusInfo(selectedDisputeTx.dispute.status);
+                  return <info.icon className={cn('w-5 h-5', info.color)} />;
+                })()}
+                <span className={cn('font-medium', getDisputeStatusInfo(selectedDisputeTx.dispute.status).color)}>
+                  {getDisputeStatusInfo(selectedDisputeTx.dispute.status).label}
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 mt-2">
+                发起时间：{formatDate(selectedDisputeTx.dispute.createdAt)}
+              </p>
+              {selectedDisputeTx.dispute.resolvedAt && (
+                <p className="text-sm text-gray-500">
+                  解决时间：{formatDate(selectedDisputeTx.dispute.resolvedAt)}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 mb-2">异议原因</h4>
+              <p className="text-sm text-gray-600 bg-gray-50 p-3 rounded-xl">{selectedDisputeTx.dispute.reason}</p>
+            </div>
+
+            {selectedDisputeTx.dispute.evidence.length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">证据材料</h4>
+                <div className="space-y-2">
+                  {selectedDisputeTx.dispute.evidence.map((e) => (
+                    <div key={e.id} className="p-3 rounded-xl bg-gray-50">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-[#2D5BFF]" />
+                        <span className="text-sm">{e.fileName || '文字说明'}</span>
+                        <span className="text-xs text-gray-400">
+                          {getUserById(e.uploadedBy)?.nickname}
+                        </span>
+                      </div>
+                      {e.type === 'text' && <p className="text-sm text-gray-500 mt-1">{e.content}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {selectedDisputeTx.dispute.responses.length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">双方回应</h4>
+                <div className="space-y-2">
+                  {selectedDisputeTx.dispute.responses.map((r) => (
+                    <div key={r.id} className="p-3 rounded-xl bg-gray-50">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Avatar src={getUserById(r.userId)?.avatar} size="sm" fallback={getUserById(r.userId)?.nickname?.[0]} />
+                        <span className="text-sm font-medium">{getUserById(r.userId)?.nickname}</span>
+                        <span className="text-xs text-gray-400">{formatDate(r.createdAt)}</span>
+                      </div>
+                      <p className="text-sm text-gray-600">{r.content}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {selectedDisputeTx.dispute.resolution && (
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">处理结果</h4>
+                <p className="text-sm text-gray-600 bg-[#10B981]/10 p-3 rounded-xl">{selectedDisputeTx.dispute.resolution}</p>
+                {selectedDisputeTx.dispute.refundAmount && (
+                  <p className="text-sm text-[#EF4444] mt-2">退款金额：¥{selectedDisputeTx.dispute.refundAmount}</p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Modal>

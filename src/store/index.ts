@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { User, Idea, Chat, Message, Favorite, Bounty, IdeaFilter, Transaction, Offer, Report, TransactionReview, Stage, Deliverable } from '@/types';
+import type { User, Idea, Chat, Message, Favorite, Bounty, IdeaFilter, Transaction, Offer, Report, TransactionReview, Stage, Deliverable, Dispute, DisputeEvidence, DisputeResponse, SettlementRecord } from '@/types';
 import { mockUsers, mockIdeas, mockChats, mockBounties } from '@/data/mockData';
 
 interface AppState {
@@ -37,11 +37,15 @@ interface AppState {
   addDeliverable: (transactionId: string, stageId: string, deliverable: Deliverable) => void;
   submitStage: (transactionId: string, stageId: string) => void;
   confirmStage: (transactionId: string, stageId: string) => void;
-  settleTransaction: (transactionId: string) => void;
+  settleTransaction: (transactionId: string, method: 'auto' | 'manual') => void;
   submitReview: (transactionId: string, review: TransactionReview) => void;
   completeTransaction: (transactionId: string) => void;
   addReport: (report: Report) => void;
   updateUserCredit: (userId: string, reviews: TransactionReview[]) => void;
+  createDispute: (transactionId: string, stageId: string, reason: string) => void;
+  addDisputeEvidence: (transactionId: string, evidence: DisputeEvidence) => void;
+  addDisputeResponse: (transactionId: string, response: DisputeResponse) => void;
+  resolveDispute: (transactionId: string, resolution: string, refundAmount?: number) => void;
   getFilteredIdeas: () => Idea[];
   getUserById: (id: string) => User | undefined;
   getIdeaById: (id: string) => Idea | undefined;
@@ -55,7 +59,7 @@ interface AppState {
   getUserReviewsReceived: () => TransactionReview[];
   getUserReviewsGiven: () => TransactionReview[];
   calculateCreditScore: (userId: string) => number;
-  getCreditTrend: () => { date: string; score: number }[];
+  getCreditTrend: () => { date: string; score: number; rating?: number }[];
 }
 
 const defaultStages: Omit<Stage, 'id'>[] = [
@@ -272,6 +276,7 @@ export const useStore = create<AppState>()(
       },
 
       confirmPayment: (transactionId) => {
+        const escrowAt = new Date().toISOString();
         set((state) => ({
           transactions: state.transactions.map((tx) =>
             tx.id === transactionId
@@ -280,8 +285,9 @@ export const useStore = create<AppState>()(
                   paymentStatus: 'escrow',
                   status: 'in_progress',
                   paidAt: new Date().toISOString(),
+                  escrowAt,
                   stages: tx.stages.map((s, i) =>
-                    i === 0 ? { ...s, status: 'in_progress', startedAt: new Date().toISOString() } : s
+                    i === 0 ? { ...s, status: 'in_progress' as const, startedAt: new Date().toISOString() } : s
                   ),
                 }
               : tx
@@ -320,7 +326,7 @@ export const useStore = create<AppState>()(
                 ...tx,
                 stages: tx.stages.map((s) =>
                   s.id === stageId
-                    ? { ...s, status: 'in_progress', startedAt: new Date().toISOString() }
+                    ? { ...s, status: 'in_progress' as const, startedAt: new Date().toISOString() }
                     : s
                 ),
               }
@@ -369,62 +375,175 @@ export const useStore = create<AppState>()(
         ),
       })),
 
-      submitStage: (transactionId, stageId) => set((state) => ({
-        transactions: state.transactions.map((tx) =>
-          tx.id === transactionId
-            ? {
-                ...tx,
-                stages: tx.stages.map((s) =>
-                  s.id === stageId
-                    ? { ...s, status: 'submitted', submittedAt: new Date().toISOString() }
-                    : s
-                ),
+      submitStage: (transactionId, stageId) => {
+        set((state) => ({
+          transactions: state.transactions.map((tx) =>
+            tx.id === transactionId
+              ? {
+                  ...tx,
+                  stages: tx.stages.map((s) =>
+                    s.id === stageId
+                      ? { ...s, status: 'submitted' as const, submittedAt: new Date().toISOString() }
+                      : s
+                  ),
+                }
+              : tx
+          ),
+        }));
+
+        const state = get();
+        const tx = state.transactions.find(t => t.id === transactionId);
+        const stage = tx?.stages.find(s => s.id === stageId);
+        if (tx && stage) {
+          const chat = state.chats.find(c => c.transactionId === transactionId);
+          if (chat) {
+            const stageMessage: Message = {
+              id: `msg-${Date.now()}-stage`,
+              chatId: chat.id,
+              senderId: 'system',
+              content: `📦 阶段「${stage.name}」已提交交付，请买方确认。`,
+              type: 'system',
+              read: false,
+              createdAt: new Date().toISOString(),
+            };
+            set((state) => ({
+              chats: state.chats.map((c) =>
+                c.id === chat.id
+                  ? { ...c, messages: [...c.messages, stageMessage] }
+                  : c
+              ),
+            }));
+          }
+        }
+      },
+
+      confirmStage: (transactionId, stageId) => {
+        set((state) => ({
+          transactions: state.transactions.map((tx) => {
+            if (tx.id !== transactionId) return tx;
+            
+            const stageIndex = tx.stages.findIndex((s) => s.id === stageId);
+            if (stageIndex === -1) return tx;
+
+            const confirmedAt = new Date().toISOString();
+            const updatedStages: Stage[] = tx.stages.map((s, i) => {
+              if (i === stageIndex) {
+                return { ...s, status: 'confirmed' as const, confirmedAt };
               }
-            : tx
-        ),
-      })),
+              if (i === stageIndex + 1 && s.status === 'pending') {
+                return { ...s, status: 'in_progress' as const, startedAt: new Date().toISOString() };
+              }
+              return s;
+            });
 
-      confirmStage: (transactionId, stageId) => set((state) => ({
-        transactions: state.transactions.map((tx) => {
-          if (tx.id !== transactionId) return tx;
-          
-          const stageIndex = tx.stages.findIndex((s) => s.id === stageId);
-          if (stageIndex === -1) return tx;
+            const allConfirmed = updatedStages.every((s) => s.status === 'confirmed');
+            const isLastStage = stageIndex === tx.stages.length - 1;
 
-          const updatedStages: Stage[] = tx.stages.map((s, i) => {
-            if (i === stageIndex) {
-              return { ...s, status: 'confirmed' as const, confirmedAt: new Date().toISOString() };
-            }
-            if (i === stageIndex + 1 && s.status === 'pending') {
-              return { ...s, status: 'in_progress' as const, startedAt: new Date().toISOString() };
-            }
-            return s;
-          });
-
-          const allConfirmed = updatedStages.every((s) => s.status === 'confirmed');
-
-          return {
-            ...tx,
-            stages: updatedStages,
-            status: allConfirmed ? 'completed' as const : tx.status,
-            completedAt: allConfirmed ? new Date().toISOString() : undefined,
-          };
-        }),
-      })),
-
-      settleTransaction: (transactionId) => set((state) => ({
-        transactions: state.transactions.map((tx) =>
-          tx.id === transactionId
-            ? {
-                ...tx,
-                paymentStatus: 'settled',
+            if (allConfirmed && isLastStage && tx.paymentStatus === 'escrow') {
+              const settlement: SettlementRecord = {
+                id: `settlement-${Date.now()}`,
+                transactionId: tx.id,
+                amount: tx.amount,
+                sellerId: tx.sellerId,
+                buyerId: tx.buyerId,
                 settledAt: new Date().toISOString(),
-                status: 'completed',
-                completedAt: new Date().toISOString(),
+                method: 'auto',
+                stageCompletedAt: confirmedAt,
+              };
+
+              const chat = get().chats.find(c => c.transactionId === transactionId);
+              if (chat) {
+                const settleMessage: Message = {
+                  id: `msg-${Date.now()}-settle`,
+                  chatId: chat.id,
+                  senderId: 'system',
+                  content: `🎉 所有阶段已完成，¥${tx.amount} 已自动结算给卖方！`,
+                  type: 'system',
+                  read: false,
+                  createdAt: new Date().toISOString(),
+                };
+                set((state) => ({
+                  chats: state.chats.map((c) =>
+                    c.id === chat.id
+                      ? { ...c, messages: [...c.messages, settleMessage] }
+                      : c
+                  ),
+                }));
               }
-            : tx
-        ),
-      })),
+
+              return {
+                ...tx,
+                stages: updatedStages,
+                status: 'completed' as const,
+                paymentStatus: 'settled' as const,
+                settlement,
+                settledAt: new Date().toISOString(),
+                completedAt: new Date().toISOString(),
+              };
+            }
+
+            return {
+              ...tx,
+              stages: updatedStages,
+              status: allConfirmed ? 'completed' as const : tx.status,
+              completedAt: allConfirmed ? new Date().toISOString() : undefined,
+            };
+          }),
+        }));
+      },
+
+      settleTransaction: (transactionId, method) => {
+        const state = get();
+        const tx = state.transactions.find(t => t.id === transactionId);
+        if (!tx) return;
+
+        const lastStage = tx.stages[tx.stages.length - 1];
+        const settlement: SettlementRecord = {
+          id: `settlement-${Date.now()}`,
+          transactionId: tx.id,
+          amount: tx.amount,
+          sellerId: tx.sellerId,
+          buyerId: tx.buyerId,
+          settledAt: new Date().toISOString(),
+          method,
+          stageCompletedAt: lastStage?.confirmedAt,
+        };
+
+        set((state) => ({
+          transactions: state.transactions.map((tx) =>
+            tx.id === transactionId
+              ? {
+                  ...tx,
+                  paymentStatus: 'settled' as const,
+                  settlement,
+                  settledAt: new Date().toISOString(),
+                  status: 'completed' as const,
+                  completedAt: new Date().toISOString(),
+                }
+              : tx
+          ),
+        }));
+
+        const chat = state.chats.find(c => c.transactionId === transactionId);
+        if (chat) {
+          const settleMessage: Message = {
+            id: `msg-${Date.now()}-settle`,
+            chatId: chat.id,
+            senderId: 'system',
+            content: `🎉 ¥${tx.amount} 已结算给卖方，交易完成！`,
+            type: 'system',
+            read: false,
+            createdAt: new Date().toISOString(),
+          };
+          set((state) => ({
+            chats: state.chats.map((c) =>
+              c.id === chat.id
+                ? { ...c, messages: [...c.messages, settleMessage] }
+                : c
+            ),
+          }));
+        }
+      },
 
       submitReview: (transactionId, review) => {
         set((state) => ({
@@ -449,7 +568,7 @@ export const useStore = create<AppState>()(
       completeTransaction: (transactionId) => set((state) => ({
         transactions: state.transactions.map((tx) =>
           tx.id === transactionId
-            ? { ...tx, status: 'completed', completedAt: new Date().toISOString() }
+            ? { ...tx, status: 'completed' as const, completedAt: new Date().toISOString() }
             : tx
         ),
       })),
@@ -476,6 +595,143 @@ export const useStore = create<AppState>()(
             ? { ...state.user, creditScore, reviewCount, positiveReviews }
             : state.user,
         }));
+      },
+
+      createDispute: (transactionId, stageId, reason) => {
+        const state = get();
+        const tx = state.transactions.find(t => t.id === transactionId);
+        if (!tx) return;
+
+        const dispute: Dispute = {
+          id: `dispute-${Date.now()}`,
+          transactionId,
+          stageId,
+          initiatorId: state.user?.id || '',
+          reason,
+          status: 'pending',
+          evidence: [],
+          responses: [],
+          createdAt: new Date().toISOString(),
+        };
+
+        set((state) => ({
+          transactions: state.transactions.map((tx) =>
+            tx.id === transactionId
+              ? {
+                  ...tx,
+                  dispute,
+                  status: 'disputed' as const,
+                  disputedAt: new Date().toISOString(),
+                  stages: tx.stages.map((s) =>
+                    s.id === stageId ? { ...s, status: 'disputed' as const } : s
+                  ),
+                }
+              : tx
+          ),
+        }));
+
+        const chat = state.chats.find(c => c.transactionId === transactionId);
+        if (chat) {
+          const disputeMessage: Message = {
+            id: `msg-${Date.now()}-dispute`,
+            chatId: chat.id,
+            senderId: 'system',
+            content: `⚠️ 争议已发起：${reason}。双方可补充说明和材料。`,
+            type: 'system',
+            read: false,
+            createdAt: new Date().toISOString(),
+          };
+          set((state) => ({
+            chats: state.chats.map((c) =>
+              c.id === chat.id
+                ? { ...c, messages: [...c.messages, disputeMessage] }
+                : c
+            ),
+          }));
+        }
+      },
+
+      addDisputeEvidence: (transactionId, evidence) => set((state) => ({
+        transactions: state.transactions.map((tx) =>
+          tx.id === transactionId && tx.dispute
+            ? {
+                ...tx,
+                dispute: {
+                  ...tx.dispute,
+                  evidence: [...tx.dispute.evidence, evidence],
+                  status: 'processing' as const,
+                },
+              }
+            : tx
+        ),
+      })),
+
+      addDisputeResponse: (transactionId, response) => set((state) => ({
+        transactions: state.transactions.map((tx) =>
+          tx.id === transactionId && tx.dispute
+            ? {
+                ...tx,
+                dispute: {
+                  ...tx.dispute,
+                  responses: [...tx.dispute.responses, response],
+                  status: 'processing' as const,
+                },
+              }
+            : tx
+        ),
+      })),
+
+      resolveDispute: (transactionId, resolution, refundAmount) => {
+        const state = get();
+        const tx = state.transactions.find(t => t.id === transactionId);
+        if (!tx || !tx.dispute) return;
+
+        const resolvedAt = new Date().toISOString();
+        const isRefunded = refundAmount && refundAmount > 0;
+
+        set((state) => ({
+          transactions: state.transactions.map((tx) =>
+            tx.id === transactionId
+              ? {
+                  ...tx,
+                  dispute: {
+                    ...tx.dispute!,
+                    status: isRefunded ? 'refunded' : 'resolved',
+                    resolution,
+                    refundAmount,
+                    resolvedAt,
+                  },
+                  status: 'completed' as const,
+                  stages: tx.stages.map((s) =>
+                    s.status === 'disputed' ? { ...s, status: 'confirmed' as const } : s
+                  ),
+                  paymentStatus: isRefunded ? 'settled' as const : tx.paymentStatus,
+                }
+              : tx
+          ),
+        }));
+
+        const chat = state.chats.find(c => c.transactionId === transactionId);
+        if (chat) {
+          const resolveMessage: Message = {
+            id: `msg-${Date.now()}-resolve`,
+            chatId: chat.id,
+            senderId: 'system',
+            content: isRefunded 
+              ? `✅ 争议已解决：${resolution}。退款 ¥${refundAmount} 已处理。`
+              : `✅ 争议已解决：${resolution}`,
+            type: 'system',
+            read: false,
+            createdAt: new Date().toISOString(),
+          };
+          set((state) => ({
+            chats: state.chats.map((c) =>
+              c.id === chat.id
+                ? { ...c, messages: [...c.messages, resolveMessage] }
+                : c
+            ),
+          }));
+        }
       },
 
       getFilteredIdeas: () => {
@@ -573,18 +829,27 @@ export const useStore = create<AppState>()(
           .filter((tx) => tx.buyerId === user.id || tx.sellerId === user.id)
           .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-        const trend: { date: string; score: number }[] = [];
+        const trend: { date: string; score: number; rating?: number }[] = [];
         let cumulativeScore = 80;
 
-        userTxs.forEach((tx, index) => {
+        userTxs.forEach((tx) => {
           const txReviews = tx.reviews.filter((r) => r.toUserId === user.id);
           if (txReviews.length > 0) {
             const avgRating = txReviews.reduce((sum, r) => sum + r.rating, 0) / txReviews.length;
-            cumulativeScore = Math.min(100, Math.round(cumulativeScore * 0.8 + avgRating * 2));
+            if (avgRating === 5) {
+              cumulativeScore = Math.min(100, cumulativeScore + 2);
+            } else if (avgRating >= 4) {
+              cumulativeScore = Math.min(100, Math.round(cumulativeScore * 0.95 + avgRating * 1));
+            } else if (avgRating >= 3) {
+              cumulativeScore = Math.max(50, Math.round(cumulativeScore * 0.9 + avgRating * 0.5));
+            } else {
+              cumulativeScore = Math.max(30, Math.round(cumulativeScore * 0.85 + avgRating * 0.3));
+            }
           }
           trend.push({
             date: new Date(tx.createdAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }),
             score: cumulativeScore,
+            rating: txReviews.length > 0 ? Math.round(txReviews.reduce((sum, r) => sum + r.rating, 0) / txReviews.length) : undefined,
           });
         });
 

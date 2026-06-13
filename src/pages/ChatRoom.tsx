@@ -1,5 +1,5 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Send, Paperclip, CheckCircle, Clock, ChevronRight, Lightbulb, DollarSign, Package, Upload, User, FileText, Edit3, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Send, Paperclip, CheckCircle, Clock, ChevronRight, Lightbulb, DollarSign, Package, Upload, User, FileText, Edit3, Plus, Trash2, AlertTriangle, XCircle, Download, Eye, MessageCircle } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { Card, CardContent } from '@/components/common/Card';
 import { Avatar } from '@/components/common/Avatar';
@@ -12,13 +12,15 @@ import { Select } from '@/components/common/Select';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { useStore } from '@/store';
 import { cn } from '@/lib/utils';
-import type { Message, Deliverable } from '@/types';
+import type { Message, Deliverable, DisputeEvidence, DisputeResponse } from '@/types';
 
 export default function ChatRoomPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getChatById, getUserById, getIdeaById, sendMessage, user, markMessagesRead, acceptOffer, rejectOffer, confirmPayment, updateStageAssignee, updateStageNotes, addDeliverable, submitStage, confirmStage, settleTransaction, transactions } = useStore();
+  const { getChatById, getUserById, getIdeaById, sendMessage, user, markMessagesRead, acceptOffer, rejectOffer, confirmPayment, updateStageAssignee, updateStageNotes, addDeliverable, submitStage, confirmStage, settleTransaction, transactions, createDispute, addDisputeEvidence, addDisputeResponse, resolveDispute } = useStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const disputeFileRef = useRef<HTMLInputElement>(null);
 
   const chat = getChatById(id || '');
   const otherId = chat?.participantIds.find((pid) => pid !== user?.id);
@@ -33,11 +35,21 @@ export default function ChatRoomPage() {
   const [messageInput, setMessageInput] = useState('');
   const [showStageModal, setShowStageModal] = useState(false);
   const [showDeliverableModal, setShowDeliverableModal] = useState(false);
+  const [showDisputeModal, setShowDisputeModal] = useState(false);
+  const [showDisputeDetailModal, setShowDisputeDetailModal] = useState(false);
+  const [showDeliverableDetailModal, setShowDeliverableDetailModal] = useState(false);
+  const [selectedDeliverables, setSelectedDeliverables] = useState<Deliverable[]>([]);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const [deliverableName, setDeliverableName] = useState('');
   const [deliverableDesc, setDeliverableDesc] = useState('');
+  const [deliverableFile, setDeliverableFile] = useState<File | null>(null);
   const [stageNotes, setStageNotes] = useState('');
   const [stageAssignee, setStageAssignee] = useState('');
+  const [disputeReason, setDisputeReason] = useState('');
+  const [disputeResponseText, setDisputeResponseText] = useState('');
+  const [disputeFiles, setDisputeFiles] = useState<File[]>([]);
+  const [disputeResolution, setDisputeResolution] = useState('');
+  const [disputeRefundAmount, setDisputeRefundAmount] = useState('');
 
   useEffect(() => {
     if (chat) {
@@ -87,13 +99,45 @@ export default function ChatRoomPage() {
     confirmPayment(transaction.id);
   };
 
-  const handleSubmitDeliverable = () => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setDeliverableFile(file);
+      setDeliverableName(file.name);
+    }
+  };
+
+  const handleSubmitDeliverable = async () => {
     if (!transaction || !selectedStageId || !deliverableName) return;
+    
+    let fileData: string | undefined;
+    let fileType: 'image' | 'pdf' | 'document' | 'other' = 'other';
+    let fileSize: number | undefined;
+
+    if (deliverableFile) {
+      const reader = new FileReader();
+      fileData = await new Promise<string>((resolve) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(deliverableFile);
+      });
+      fileSize = deliverableFile.size;
+      
+      if (deliverableFile.type.startsWith('image/')) {
+        fileType = 'image';
+      } else if (deliverableFile.type === 'application/pdf') {
+        fileType = 'pdf';
+      } else if (deliverableFile.type.includes('document') || deliverableFile.type.includes('word')) {
+        fileType = 'document';
+      }
+    }
     
     const deliverable: Deliverable = {
       id: `del-${Date.now()}`,
       name: deliverableName,
       description: deliverableDesc,
+      fileData,
+      fileType,
+      fileSize,
       uploadedBy: user?.id || '',
       uploadedAt: new Date().toISOString(),
     };
@@ -101,8 +145,12 @@ export default function ChatRoomPage() {
     addDeliverable(transaction.id, selectedStageId, deliverable);
     setDeliverableName('');
     setDeliverableDesc('');
+    setDeliverableFile(null);
     setShowDeliverableModal(false);
     setSelectedStageId(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   const handleSubmitStage = (stageId: string) => {
@@ -117,7 +165,7 @@ export default function ChatRoomPage() {
 
   const handleSettleTransaction = () => {
     if (!transaction) return;
-    settleTransaction(transaction.id);
+    settleTransaction(transaction.id, 'manual');
   };
 
   const handleUpdateStageNotes = () => {
@@ -132,16 +180,83 @@ export default function ChatRoomPage() {
     setShowStageModal(false);
   };
 
+  const handleCreateDispute = () => {
+    if (!transaction || !selectedStageId || !disputeReason) return;
+    createDispute(transaction.id, selectedStageId, disputeReason);
+    setDisputeReason('');
+    setSelectedStageId(null);
+    setShowDisputeModal(false);
+  };
+
+  const handleAddDisputeResponse = async () => {
+    if (!transaction || !disputeResponseText) return;
+
+    const attachments: DisputeEvidence[] = [];
+    for (const file of disputeFiles) {
+      const reader = new FileReader();
+      const fileData = await new Promise<string>((resolve) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+      attachments.push({
+        id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        uploadedBy: user?.id || '',
+        type: 'file',
+        content: fileData,
+        fileName: file.name,
+        fileSize: file.size,
+        uploadedAt: new Date().toISOString(),
+      });
+    }
+
+    const response: DisputeResponse = {
+      id: `resp-${Date.now()}`,
+      userId: user?.id || '',
+      content: disputeResponseText,
+      attachments,
+      createdAt: new Date().toISOString(),
+    };
+
+    addDisputeResponse(transaction.id, response);
+    setDisputeResponseText('');
+    setDisputeFiles([]);
+    if (disputeFileRef.current) {
+      disputeFileRef.current.value = '';
+    }
+  };
+
+  const handleResolveDispute = () => {
+    if (!transaction || !disputeResolution) return;
+    const refund = disputeRefundAmount ? Number(disputeRefundAmount) : undefined;
+    resolveDispute(transaction.id, disputeResolution, refund);
+    setDisputeResolution('');
+    setDisputeRefundAmount('');
+    setShowDisputeDetailModal(false);
+  };
+
+  const handleViewDeliverables = (deliverables: Deliverable[]) => {
+    setSelectedDeliverables(deliverables);
+    setShowDeliverableDetailModal(true);
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  };
+
   const getStageStatus = (status: string) => {
     switch (status) {
       case 'confirmed':
-        return { icon: CheckCircle, color: 'text-[#10B981]', bg: 'bg-[#10B981]/10' };
+        return { icon: CheckCircle, color: 'text-[#10B981]', bg: 'bg-[#10B981]/10', label: '已完成' };
       case 'submitted':
-        return { icon: Clock, color: 'text-[#F59E0B]', bg: 'bg-[#F59E0B]/10' };
+        return { icon: Clock, color: 'text-[#F59E0B]', bg: 'bg-[#F59E0B]/10', label: '待确认' };
       case 'in_progress':
-        return { icon: Clock, color: 'text-[#2D5BFF]', bg: 'bg-[#2D5BFF]/10' };
+        return { icon: Clock, color: 'text-[#2D5BFF]', bg: 'bg-[#2D5BFF]/10', label: '进行中' };
+      case 'disputed':
+        return { icon: AlertTriangle, color: 'text-[#EF4444]', bg: 'bg-[#EF4444]/10', label: '有争议' };
       default:
-        return { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-100' };
+        return { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-100', label: '待开始' };
     }
   };
 
@@ -168,6 +283,21 @@ export default function ChatRoomPage() {
         return 'text-[#10B981]';
       default:
         return 'text-gray-400';
+    }
+  };
+
+  const getDisputeStatusInfo = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return { icon: Clock, color: 'text-[#F59E0B]', bg: 'bg-[#F59E0B]/10', label: '待处理' };
+      case 'processing':
+        return { icon: MessageCircle, color: 'text-[#2D5BFF]', bg: 'bg-[#2D5BFF]/10', label: '处理中' };
+      case 'resolved':
+        return { icon: CheckCircle, color: 'text-[#10B981]', bg: 'bg-[#10B981]/10', label: '已解决' };
+      case 'refunded':
+        return { icon: XCircle, color: 'text-[#EF4444]', bg: 'bg-[#EF4444]/10', label: '已退款' };
+      default:
+        return { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-100', label: '未知' };
     }
   };
 
@@ -211,7 +341,24 @@ export default function ChatRoomPage() {
 
         <div className="p-4 border-t border-gray-100">
           <div className="flex items-center gap-2">
-            <button className="p-2 rounded-xl hover:bg-gray-100 transition-colors">
+            <input type="file" ref={fileInputRef} className="hidden" onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                const fileMessage: Message = {
+                  id: `msg-${Date.now()}`,
+                  chatId: chat.id,
+                  senderId: user?.id || '',
+                  content: `上传文件：${file.name}`,
+                  type: 'file',
+                  fileUrl: URL.createObjectURL(file),
+                  read: false,
+                  createdAt: new Date().toISOString(),
+                };
+                sendMessage(chat.id, fileMessage);
+                e.target.value = '';
+              }
+            }} />
+            <button className="p-2 rounded-xl hover:bg-gray-100 transition-colors" onClick={() => fileInputRef.current?.click()}>
               <Paperclip className="w-5 h-5 text-gray-400" />
             </button>
             <input
@@ -326,10 +473,33 @@ export default function ChatRoomPage() {
                   </Button>
                 )}
 
-                {transaction.paymentStatus === 'escrow' && transaction.stages.every(s => s.status === 'confirmed') && isBuyer && (
-                  <Button variant="primary" className="w-full" onClick={handleSettleTransaction}>
-                    确认结算
-                  </Button>
+                {transaction.settlement && (
+                  <div className="mt-3 p-3 rounded-xl bg-[#10B981]/10 text-sm">
+                    <p className="text-[#10B981] font-medium">
+                      {transaction.settlement.method === 'auto' ? '自动结算' : '手动结算'}
+                    </p>
+                    <p className="text-gray-500 text-xs mt-1">
+                      结算时间：{new Date(transaction.settlement.settledAt).toLocaleString('zh-CN')}
+                    </p>
+                  </div>
+                )}
+
+                {transaction.dispute && (
+                  <button
+                    onClick={() => setShowDisputeDetailModal(true)}
+                    className="mt-3 w-full p-3 rounded-xl bg-[#EF4444]/10 text-sm text-left hover:bg-[#EF4444]/20 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-[#EF4444]" />
+                        <span className="text-[#EF4444] font-medium">存在争议</span>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-[#EF4444]" />
+                    </div>
+                    <p className="text-gray-500 text-xs mt-1">
+                      {getDisputeStatusInfo(transaction.dispute.status).label}
+                    </p>
+                  </button>
                 )}
               </CardContent>
             </Card>
@@ -341,8 +511,8 @@ export default function ChatRoomPage() {
                     <Package className="w-5 h-5 text-[#2D5BFF]" />
                     交易阶段
                   </h3>
-                  <Tag variant={transaction.status === 'completed' ? 'success' : transaction.status === 'in_progress' ? 'warning' : 'default'}>
-                    {transaction.status === 'completed' ? '已完成' : transaction.status === 'in_progress' ? '进行中' : '待付款'}
+                  <Tag variant={transaction.status === 'completed' ? 'success' : transaction.status === 'disputed' ? 'danger' : transaction.status === 'in_progress' ? 'warning' : 'default'}>
+                    {transaction.status === 'completed' ? '已完成' : transaction.status === 'disputed' ? '争议中' : transaction.status === 'in_progress' ? '进行中' : '待付款'}
                   </Tag>
                 </div>
 
@@ -361,17 +531,28 @@ export default function ChatRoomPage() {
                               <p className={cn('text-sm font-medium', stage.status === 'confirmed' ? 'text-gray-900' : 'text-gray-500')}>
                                 {stage.name}
                               </p>
-                              <button
-                                onClick={() => {
-                                  setSelectedStageId(stage.id);
-                                  setStageNotes(stage.notes || '');
-                                  setStageAssignee(stage.assigneeId || '');
-                                  setShowStageModal(true);
-                                }}
-                                className="p-1 rounded hover:bg-gray-200"
-                              >
-                                <Edit3 className="w-3 h-3 text-gray-400" />
-                              </button>
+                              <div className="flex items-center gap-1">
+                                {stage.deliverables.length > 0 && (
+                                  <button
+                                    onClick={() => handleViewDeliverables(stage.deliverables)}
+                                    className="p-1 rounded hover:bg-gray-200"
+                                    title="查看交付物"
+                                  >
+                                    <Eye className="w-3 h-3 text-[#2D5BFF]" />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => {
+                                    setSelectedStageId(stage.id);
+                                    setStageNotes(stage.notes || '');
+                                    setStageAssignee(stage.assigneeId || '');
+                                    setShowStageModal(true);
+                                  }}
+                                  className="p-1 rounded hover:bg-gray-200"
+                                >
+                                  <Edit3 className="w-3 h-3 text-gray-400" />
+                                </button>
+                              </div>
                             </div>
                             
                             {assignee && (
@@ -386,13 +567,9 @@ export default function ChatRoomPage() {
                             )}
 
                             {stage.deliverables.length > 0 && (
-                              <div className="mt-2 space-y-1">
-                                {stage.deliverables.map((d) => (
-                                  <div key={d.id} className="flex items-center gap-1 text-xs text-gray-500">
-                                    <FileText className="w-3 h-3" />
-                                    {d.name}
-                                  </div>
-                                ))}
+                              <div className="mt-2 flex items-center gap-1">
+                                <FileText className="w-3 h-3 text-[#2D5BFF]" />
+                                <span className="text-xs text-[#2D5BFF]">{stage.deliverables.length} 个交付物</span>
                               </div>
                             )}
 
@@ -403,7 +580,7 @@ export default function ChatRoomPage() {
                                   setShowDeliverableModal(true);
                                 }}>
                                   <Plus className="w-3 h-3 mr-1" />
-                                  添加交付物
+                                  上传交付物
                                 </Button>
                                 <Button variant="primary" size="sm" onClick={() => handleSubmitStage(stage.id)}>
                                   提交阶段
@@ -412,13 +589,26 @@ export default function ChatRoomPage() {
                             )}
 
                             {stage.status === 'submitted' && isBuyer && (
-                              <Button variant="primary" size="sm" className="mt-2" onClick={() => handleConfirmStage(stage.id)}>
-                                确认完成
-                              </Button>
+                              <div className="mt-2 flex items-center gap-2">
+                                <Button variant="primary" size="sm" onClick={() => handleConfirmStage(stage.id)}>
+                                  确认完成
+                                </Button>
+                                <Button variant="ghost" size="sm" className="text-[#EF4444]" onClick={() => {
+                                  setSelectedStageId(stage.id);
+                                  setShowDisputeModal(true);
+                                }}>
+                                  <AlertTriangle className="w-3 h-3 mr-1" />
+                                  发起异议
+                                </Button>
+                              </div>
                             )}
 
                             {stage.status === 'confirmed' && (
                               <p className="text-xs text-[#10B981] mt-1">已完成 ✓</p>
+                            )}
+
+                            {stage.status === 'disputed' && (
+                              <p className="text-xs text-[#EF4444] mt-1">存在争议</p>
                             )}
                           </div>
                         </div>
@@ -449,8 +639,33 @@ export default function ChatRoomPage() {
         </Card>
       </div>
 
-      <Modal isOpen={showDeliverableModal} onClose={() => { setShowDeliverableModal(false); setSelectedStageId(null); }} title="添加交付物" size="md">
+      <Modal isOpen={showDeliverableModal} onClose={() => { setShowDeliverableModal(false); setSelectedStageId(null); setDeliverableFile(null); }} title="上传交付物" size="md">
         <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">选择文件</label>
+            <div className="border-2 border-dashed border-gray-200 rounded-xl p-4 text-center hover:border-[#2D5BFF] transition-colors">
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileUpload}
+                className="hidden"
+                id="deliverable-file"
+                accept="image/*,.pdf,.doc,.docx,.zip,.rar"
+              />
+              <label htmlFor="deliverable-file" className="cursor-pointer">
+                <Upload className="w-6 h-6 text-gray-400 mx-auto mb-2" />
+                <p className="text-sm text-gray-500">点击选择文件</p>
+                <p className="text-xs text-gray-400 mt-1">支持图片、PDF、文档、压缩包</p>
+              </label>
+            </div>
+            {deliverableFile && (
+              <div className="mt-2 p-2 rounded-lg bg-[#2D5BFF]/10 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[#2D5BFF]" />
+                <span className="text-sm text-gray-700">{deliverableFile.name}</span>
+                <span className="text-xs text-gray-400">{formatFileSize(deliverableFile.size)}</span>
+              </div>
+            )}
+          </div>
           <Input
             label="交付物名称"
             placeholder="例如：设计稿、文档、代码"
@@ -465,13 +680,52 @@ export default function ChatRoomPage() {
             rows={3}
           />
           <div className="flex items-center gap-3">
-            <Button variant="ghost" onClick={() => { setShowDeliverableModal(false); setSelectedStageId(null); }} className="flex-1">
+            <Button variant="ghost" onClick={() => { setShowDeliverableModal(false); setSelectedStageId(null); setDeliverableFile(null); }} className="flex-1">
               取消
             </Button>
             <Button variant="primary" onClick={handleSubmitDeliverable} className="flex-1" disabled={!deliverableName}>
-              添加
+              上传
             </Button>
           </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={showDeliverableDetailModal} onClose={() => { setShowDeliverableDetailModal(false); setSelectedDeliverables([]); }} title="交付物详情" size="lg">
+        <div className="space-y-3">
+          {selectedDeliverables.map((d) => (
+            <div key={d.id} className="p-4 rounded-xl bg-gray-50">
+              <div className="flex items-center gap-2 mb-2">
+                <FileText className="w-5 h-5 text-[#2D5BFF]" />
+                <span className="font-medium text-gray-900">{d.name}</span>
+                {d.fileSize && <span className="text-xs text-gray-400">{formatFileSize(d.fileSize)}</span>}
+              </div>
+              {d.description && <p className="text-sm text-gray-500 mb-2">{d.description}</p>}
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <span>上传者：{getUserById(d.uploadedBy)?.nickname}</span>
+                <span>时间：{new Date(d.uploadedAt).toLocaleString('zh-CN')}</span>
+              </div>
+              {d.fileData && d.fileType === 'image' && (
+                <div className="mt-3 rounded-lg overflow-hidden">
+                  <img src={d.fileData} alt={d.name} className="max-w-full h-auto" />
+                </div>
+              )}
+              {d.fileData && d.fileType !== 'image' && (
+                <div className="mt-3">
+                  <a 
+                    href={d.fileData} 
+                    download={d.name}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[#2D5BFF]/10 text-[#2D5BFF] text-sm hover:bg-[#2D5BFF]/20"
+                  >
+                    <Download className="w-4 h-4" />
+                    下载文件
+                  </a>
+                </div>
+              )}
+            </div>
+          ))}
+          {selectedDeliverables.length === 0 && (
+            <p className="text-center text-gray-500 py-4">暂无交付物</p>
+          )}
         </div>
       </Modal>
 
@@ -506,6 +760,145 @@ export default function ChatRoomPage() {
                 保存
               </Button>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal isOpen={showDisputeModal} onClose={() => { setShowDisputeModal(false); setSelectedStageId(null); setDisputeReason(''); }} title="发起异议" size="md">
+        <div className="space-y-4">
+          <div className="p-3 rounded-xl bg-[#EF4444]/10 text-sm text-[#EF4444]">
+            <AlertTriangle className="w-4 h-4 inline mr-1" />
+            发起异议后，交易将暂停，双方可补充说明和材料。
+          </div>
+          <Textarea
+            label="异议原因"
+            placeholder="请详细描述你对交付不满意的原因"
+            value={disputeReason}
+            onChange={(e) => setDisputeReason(e.target.value)}
+            rows={4}
+          />
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" onClick={() => { setShowDisputeModal(false); setSelectedStageId(null); setDisputeReason(''); }} className="flex-1">
+              取消
+            </Button>
+            <Button variant="primary" onClick={handleCreateDispute} className="flex-1" disabled={!disputeReason}>
+              发起异议
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={showDisputeDetailModal} onClose={() => setShowDisputeDetailModal(false)} title="争议详情" size="lg">
+        {transaction?.dispute && (
+          <div className="space-y-4">
+            <div className={cn('p-4 rounded-xl', getDisputeStatusInfo(transaction.dispute.status).bg)}>
+              <div className="flex items-center gap-2">
+                {(() => {
+                  const info = getDisputeStatusInfo(transaction.dispute.status);
+                  return <info.icon className={cn('w-5 h-5', info.color)} />;
+                })()}
+                <span className={cn('font-medium', getDisputeStatusInfo(transaction.dispute.status).color)}>
+                  {getDisputeStatusInfo(transaction.dispute.status).label}
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 mt-2">
+                发起时间：{new Date(transaction.dispute.createdAt).toLocaleString('zh-CN')}
+              </p>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 mb-2">异议原因</h4>
+              <p className="text-sm text-gray-600 bg-gray-50 p-3 rounded-xl">{transaction.dispute.reason}</p>
+            </div>
+
+            {transaction.dispute.evidence.length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">证据材料</h4>
+                <div className="space-y-2">
+                  {transaction.dispute.evidence.map((e) => (
+                    <div key={e.id} className="p-3 rounded-xl bg-gray-50">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-[#2D5BFF]" />
+                        <span className="text-sm">{e.fileName || '文字说明'}</span>
+                        <span className="text-xs text-gray-400">
+                          {getUserById(e.uploadedBy)?.nickname}
+                        </span>
+                      </div>
+                      {e.type === 'text' && <p className="text-sm text-gray-500 mt-1">{e.content}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {transaction.dispute.responses.length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">双方回应</h4>
+                <div className="space-y-2">
+                  {transaction.dispute.responses.map((r) => (
+                    <div key={r.id} className="p-3 rounded-xl bg-gray-50">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Avatar src={getUserById(r.userId)?.avatar} size="sm" fallback={getUserById(r.userId)?.nickname?.[0]} />
+                        <span className="text-sm font-medium">{getUserById(r.userId)?.nickname}</span>
+                        <span className="text-xs text-gray-400">{new Date(r.createdAt).toLocaleString('zh-CN')}</span>
+                      </div>
+                      <p className="text-sm text-gray-600">{r.content}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {transaction.dispute.status !== 'resolved' && transaction.dispute.status !== 'refunded' && (
+              <div className="border-t border-gray-100 pt-4">
+                <h4 className="text-sm font-medium text-gray-700 mb-2">补充回应</h4>
+                <div className="space-y-3">
+                  <Textarea
+                    placeholder="补充说明或回应"
+                    value={disputeResponseText}
+                    onChange={(e) => setDisputeResponseText(e.target.value)}
+                    rows={3}
+                  />
+                  <input
+                    type="file"
+                    ref={disputeFileRef}
+                    onChange={(e) => {
+                      const files = e.target.files;
+                      if (files) {
+                        setDisputeFiles([...disputeFiles, ...Array.from(files)]);
+                      }
+                    }}
+                    className="hidden"
+                    id="dispute-file"
+                    multiple
+                  />
+                  <label htmlFor="dispute-file" className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 text-gray-600 text-sm cursor-pointer hover:bg-gray-200">
+                    <Upload className="w-4 h-4" />
+                    上传材料
+                  </label>
+                  {disputeFiles.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      {disputeFiles.map((f, i) => (
+                        <span key={i} className="text-xs text-gray-500">{f.name}</span>
+                      ))}
+                    </div>
+                  )}
+                  <Button variant="outline" onClick={handleAddDisputeResponse} disabled={!disputeResponseText}>
+                    提交回应
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {transaction.dispute.resolution && (
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">处理结果</h4>
+                <p className="text-sm text-gray-600 bg-[#10B981]/10 p-3 rounded-xl">{transaction.dispute.resolution}</p>
+                {transaction.dispute.refundAmount && (
+                  <p className="text-sm text-[#EF4444] mt-2">退款金额：¥{transaction.dispute.refundAmount}</p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Modal>

@@ -51,6 +51,50 @@ export interface Offer {
   createdAt: string;
 }
 
+export interface SettlementRecord {
+  id: string;
+  transactionId: string;
+  amount: number;
+  sellerId: string;
+  buyerId: string;
+  settledAt: string;
+  method: 'auto' | 'manual';
+  stageCompletedAt?: string;
+}
+
+export interface Dispute {
+  id: string;
+  transactionId: string;
+  stageId: string;
+  initiatorId: string;
+  reason: string;
+  status: 'pending' | 'processing' | 'resolved' | 'refunded';
+  evidence: DisputeEvidence[];
+  responses: DisputeResponse[];
+  createdAt: string;
+  resolvedAt?: string;
+  resolution?: string;
+  refundAmount?: number;
+}
+
+export interface DisputeEvidence {
+  id: string;
+  uploadedBy: string;
+  type: 'file' | 'text';
+  content: string;
+  fileName?: string;
+  fileSize?: number;
+  uploadedAt: string;
+}
+
+export interface DisputeResponse {
+  id: string;
+  userId: string;
+  content: string;
+  attachments: DisputeEvidence[];
+  createdAt: string;
+}
+
 export interface Transaction {
   id: string;
   ideaId: string;
@@ -60,12 +104,16 @@ export interface Transaction {
   amount: number;
   paymentStatus: 'unpaid' | 'escrow' | 'settled';
   stages: Stage[];
-  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'disputed';
   reviews: TransactionReview[];
+  settlement?: SettlementRecord;
+  dispute?: Dispute;
   createdAt: string;
   paidAt?: string;
+  escrowAt?: string;
   settledAt?: string;
   completedAt?: string;
+  disputedAt?: string;
 }
 
 export interface Stage {
@@ -75,7 +123,7 @@ export interface Stage {
   assigneeId?: string;
   notes?: string;
   deliverables: Deliverable[];
-  status: 'pending' | 'in_progress' | 'submitted' | 'confirmed';
+  status: 'pending' | 'in_progress' | 'submitted' | 'confirmed' | 'disputed';
   startedAt?: string;
   submittedAt?: string;
   confirmedAt?: string;
@@ -85,6 +133,9 @@ export interface Deliverable {
   id: string;
   name: string;
   url?: string;
+  fileData?: string;
+  fileType?: 'image' | 'pdf' | 'document' | 'other';
+  fileSize?: number;
   description: string;
   uploadedBy: string;
   uploadedAt: string;
